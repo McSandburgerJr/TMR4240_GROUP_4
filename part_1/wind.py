@@ -43,13 +43,13 @@ from pathlib import Path
 from typing import Dict, Tuple
 import numpy as np
 
+# Wind coefficient table file path
 _WIND_COEFF_FILE = Path(__file__).resolve().parent.parent / "data" / "wind_coeff.csv"
 
-
+# Load the wind coefficient table from the CSV file
 def load_wind_coefficients() -> Tuple[np.ndarray, np.ndarray]:
     """
-    Load the vessel wind coefficient table.
-
+    Load the vessel wind coefficient table.u
     Returns
     -------
     alpha_deg : (M,) ndarray
@@ -60,7 +60,7 @@ def load_wind_coefficients() -> Tuple[np.ndarray, np.ndarray]:
     table = np.loadtxt(_WIND_COEFF_FILE, delimiter=",", skiprows=1)
     return table[:, 0], table[:, 1:]
 
-
+# Wind model class
 class Wind:
     """Template for student wind model.
 
@@ -86,12 +86,18 @@ class Wind:
                  semantics: str = "from", sigma_slow: float = 0.0,
                  tau_slow: float = 120.0, seed: int | None = None):
         # TODO: Store and use the parameters above in step().
-        self.mean_speed = float(mean_speed)
-        self.beta = float(beta)
-        self.semantics = semantics
-        self.sigma_slow = float(sigma_slow)
-        self.tau_slow = float(tau_slow)
-        self.seed = seed
+        self.mean_speed = float(mean_speed) # Mean wind speed in m/s
+        self.beta = float(beta) # Wind direction in NED frame (0 = North, pi/2 = East)
+        self.semantics = semantics  # "from" or "towards" semantics for wind direction
+        self.sigma_slow = float(sigma_slow) # Standard deviation of the slowly-varying wind speed component in m/s
+        self.tau_slow = float(tau_slow) # Time constant of the slow variation in seconds
+        self.seed = seed # Random seed for reproducibility of the slow component
+
+        self.alpha_deg_table, self.C6_table = load_wind_coefficients() # Load wind coefficient table from CSV file
+
+        # Initialize random number generator for the slow wind component
+        self.rng = np.random.default_rng(self.seed)
+        self.V_slow = 0.0
 
     def step(
         self,
@@ -102,6 +108,58 @@ class Wind:
     ) -> Tuple[np.ndarray, Dict[str, float]]:
         # TODO: Replace this placeholder with your wind load model.
         # Default: no wind loads.
+
+        if self.sigma_slow > 0.0 and self.tau_slow > 0.0:
+            # White noise
+            w_std = np.sqrt(2.0 * (self.sigma_slow ** 2) / self.tau_slow)
+            w = self.rng.normal(0.0, w_std)
+            
+            # Differential equation 
+            V_slow_dot = -(1.0 / self.tau_slow) * self.V_slow + w
+            
+            # Euler integration
+            self.V_slow += V_slow_dot * dt
+        else:
+            self.V_slow = 0.0
+
+        # Sum of mean speed and turbulence
+        V_w = max(0.0, min(self.mean_speed +  self.V_slow, 25.0))  # Limit the wind speed to a maximum of 25 m/s
+
+        # Problamatic: from x towards, so convert to "towards" semantics for the calculations
+        if self.semantics == "from":
+            beta_ned = (self.beta + np.pi) % (2 * np.pi)
+        else:
+            beta_ned = self.beta % (2 * np.pi)
+
+        # Take psi from NED frame    
+        psi = eta[5] 
+
+        # Compute wind components in NED frame
+        u_w = V_w * np.cos(beta_ned - psi)
+        v_w = V_w * np.sin(beta_ned - psi)
+
+        # Compute relative wind in BODY frame
+        u_rw = nu[0] - u_w
+        v_rw = nu[1] - v_w
+
+        
+        U_rw = np.sqrt(u_rw**2 + v_rw**2) # Relative wind speed magnitude in BODY frame
+        alpha_body_rad = np.arctan2(-v_rw, -u_rw) # Relative wind angle in BODY frame (rad)
+        alpha_body_deg = np.degrees(alpha_body_rad) % 360.0 # Relative wind angle in BODY frame (deg)
+
+        # matrix of wind loads in BODY frame
         tau_w6 = np.zeros(6)
-        info = {"U": 0.0, "beta_ned": 0.0, "alpha_body": 0.0}
+        C_alpha = np.zeros(6)
+
+        # I wind coefficients for the current relative wind angle
+        for i in range(6):
+            C_alpha[i] = np.interp(alpha_body_deg, self.alpha_deg_table, self.C6_table[:, i], period=360.0)
+
+        # Compute wind loads in BODY frame (C has rho in it, A, the distance...)   
+        tau_w6 = (U_rw**2) * C_alpha
+        info = {
+            "U": float(V_w),
+            "beta_ned": float(beta_ned),
+            "alpha_body": float(alpha_body_rad)
+        }
         return tau_w6, info
