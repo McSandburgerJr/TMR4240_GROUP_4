@@ -22,6 +22,7 @@ Output:
                flows to): a current with V_N > 0, V_E = 0 pushes the vessel
                North.
 """
+import math
 import numpy as np
 
 
@@ -65,4 +66,23 @@ class Current:
     ) -> np.ndarray:
         # TODO: Replace this placeholder with your current model.
         # Default: no current.
-        return np.zeros(6)
+
+
+        #  Actual current direction (rad) in NED frame, possibly varying over time
+        current_beta = self.beta
+        if self.beta_end is not None and self.duration > 0.0:
+            if t < self.duration:
+                current_beta = self.beta + (self.beta_end - self.beta) * (t / self.duration)
+            else:
+                current_beta = self.beta_end
+
+        #  Deal with semantics
+        if self.semantics == "from":
+            current_beta += math.pi
+
+        # Convert to NED components
+        V_N = self.speed * math.cos(current_beta)
+        V_E = self.speed * math.sin(current_beta)
+        
+        # Return the current loads in NED frame
+        return np.array([V_N, V_E, 0.0, 0.0, 0.0, 0.0])
