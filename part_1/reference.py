@@ -60,11 +60,43 @@ class ReferenceModel:
         self.nu_ref = np.zeros(6)
         self.acc_ref = np.zeros(6)
 
+    @staticmethod
+
+    def _wrap_to_pi(angle :float) -> float:                          
+        """Wrapping the boundaries of psi from [0,2pi) to (-pi, pi]"""
+        return (angle + np.pi) % (2*np.pi) - np.pi
+
+    @staticmethod
+
+    def _second_order_accerleration(cfg: RefAxisConfig, x1, x2, r): 
+        """Solving the second-order low-pass filter for desired accelerations. x1 = eta_desired, x2 = eta_dot_desired, r = eta_cmd"""
+
+        wn, zeta= cfg.wn, cfg.zeta
+
+        return wn**2*(r-x1) - 2*zeta*wn*x2
+
     def step(
         self, t: float, dt: float, eta_cmd: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         # TODO: Replace this pass-through placeholder with your reference model.
-        self.eta_ref = np.asarray(eta_cmd, dtype=float).reshape(6).copy()
-        self.nu_ref = np.zeros(6)
-        self.acc_ref = np.zeros(6)
+        N_cmd, E_cmd, psi_cmd = eta_cmd[0], eta_cmd[1], eta_cmd[5]
+
+        # N, E 
+        for idx, r in ((0,N_cmd), (1,E_cmd)):
+            x1, x2 = self.eta_ref[idx], self.nu_ref[idx]
+            x2_dot = self._second_order_accerleration(self.cfg_xy, x1, x2, r)
+            self.eta_ref[idx] = x1 + x2*dt
+            self.nu_ref[idx] = x2 + dt*x2_dot
+            self.acc_ref[idx] = x2_dot
+
+        # psi - yaw
+        psi_error = self._wrap_to_pi(psi_cmd - self.eta_ref[5])
+        r = self.eta_ref[5] + psi_error
+        x1, x2 = self.eta_ref[5], self.nu_ref[5]
+        x2_dot = self._second_order_accerleration(self.cfg_psi, x1, x2, r)
+        self.eta_ref[5] = x1 + x2*dt
+        self.nu_ref[5] = x2 + x2_dot*dt
+        self.acc_ref[5] = x2_dot
+
+    
         return self.eta_ref, self.nu_ref, self.acc_ref
