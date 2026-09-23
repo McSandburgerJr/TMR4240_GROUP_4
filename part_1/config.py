@@ -76,6 +76,6 @@ def default_thrusters_gunnerus3() -> list[ThrusterConfig]:
 
 @dataclass  
 class PIDGains:
-        Kp: np.ndarray = field(default_factory=lambda: np.array([1e4,1e4,5e5]))   
-        Ki: np.ndarray = field(default_factory=lambda: np.array([1e2,1e2,5e3]))
-        Kd: np.ndarray = field(default_factory=lambda: np.array([1e5,1e5,9e6]))
+    Kp: np.ndarray = field(default_factory=lambda: np.array([6e3, 7e3, 5.5e5]))
+    Ki: np.ndarray = field(default_factory=lambda: np.array([6e1, 7e1, 5.5e3]))
+    Kd: np.ndarray = field(default_factory=lambda: np.array([1e5, 1e5, 9e6]))
