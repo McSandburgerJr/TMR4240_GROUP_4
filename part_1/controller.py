@@ -45,7 +45,9 @@ constructor defaults. Tuning only inside ``run_case_part1.py`` will pass your
 own runs but fail the checks.
 """
 import numpy as np
+from part_1.config import PIDGains
 
+DOF = [0,1,5]
 
 class DPController:
     """
@@ -56,11 +58,47 @@ class DPController:
     """
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.Kp = np.asarray(PIDGains().Kp, dtype=float)
+        self.Ki = np.asarray(PIDGains().Ki, dtype=float)
+        self.Kd = np.asarray(PIDGains().Kd, dtype=float)
+        self.reset()
 
     def reset(self) -> None:
         """Optional: reset internal states (integrators, filters) before a run."""
+        self.integral = np.zeros(3)               # NED integral [N, E, psi]
+        self.last_pid_body = {k: np.zeros(6) for k in ("P", "I", "D")}
         pass
+
+    @staticmethod
+
+    def Rz(psi: float)-> float:
+        """Rotation matrix about z : body frame -> NED frame"""
+        c, s = np.cos(psi), np.sin(psi)
+
+        return np.array([[c, -s, 0],
+                         [s, c, 0],
+                         [0, 0, 1]])
+    
+    @staticmethod 
+
+    def PID(self, error : np.array, error_dot : np.array, dt: float) -> np.array:
+
+        # Proportional
+        P = self.Kp* error
+
+        #Integral
+        self.integral += error*dt
+        I = self.Ki * self.integral
+
+        #Derivative
+        D = self.Kd * error_dot
+
+        #adding anti-windup ? 
+        
+        return P, I, D
+
+
+
 
     def compute(
         self,
@@ -75,4 +113,23 @@ class DPController:
         # TODO: Replace this placeholder with your DP controller.
         # Return the (6,) desired BODY wrench — fill in tau_d[0] = Fx,
         # tau_d[1] = Fy, tau_d[5] = Mz and leave the rest zero.
-        return np.zeros(6)
+        psi = eta[5]
+        R = self.Rz(psi)
+
+        error = eta_ref[DOF] - eta[DOF]
+        error[2] = np.arctan2(np.sin(error[2]), np.cos(error[2]))
+
+        eta_dot = R @ nu[DOF]
+        eta_dot_ref = np.zeros(3) if nu_ref is None else nu_ref[DOF]
+        error_dot = eta_dot_ref - eta_dot
+
+        #Rotate error to error_BF
+        P, I, D = self.PID(self, error, error_dot, dt)
+
+        P, I, D = R.T @ P, R.T @ I, R.T @ D 
+        tau = np.zeros(6)
+        tau[DOF] = P + I + D        
+        return tau
+
+tau = [100,100, 0, 0, 0, 100]
+     

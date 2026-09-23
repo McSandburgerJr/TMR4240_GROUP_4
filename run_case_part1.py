@@ -20,6 +20,7 @@ from part_1.controller import DPController
 from part_1.reference import ReferenceModel
 from part_1.current import Current
 from part_1.wind import Wind
+from part_1.config import PIDGains
 
 
 
