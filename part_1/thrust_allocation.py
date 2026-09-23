@@ -50,7 +50,8 @@ class ThrustAllocator:
         # TODO: Replace this placeholder with your thrust allocation algorithm.
         # The placeholder commands zero thrust and alpha for all thrusters.
         u_cmd = np.zeros(n)
-        alpha_cmd = np.zeros(n)
+        #alpha_cmd = np.zeros(n)
+        alpha_cmd = np.array([th.alpha0 for th in self.thrusters]) #Test
         # Weighted least-squares method 
         B = np.zeros((3,n)) # Overview of each thrusters contribution to the body wrench
         tau_3d = tau_d[[0, 1, 5]]
@@ -59,7 +60,7 @@ class ThrustAllocator:
             B[0, i] = np.cos(th.alpha0) # F_x contribution
             B[1, i] = np.sin(th.alpha0) # F_y contribution
             B[2, i] = th.x * np.sin(th.alpha0) - th.y * np.cos(th.alpha0) # M_z contribution
-        Bm = np.linalg.solve(B, tau_3d) # F_x, F_y, M_z = B * u_cmd
+        # Bm = np.linalg.solve(B, tau_3d) # F_x, F_y, M_z = B * u_cmd
         
         # Implementing the B_e matrix
         B_e = np.zeros((3,5))
@@ -68,9 +69,11 @@ class ThrustAllocator:
         azimuth2 = self.thrusters[2]
         
         B_e[:,0] = B[:,0] # B_T
-        B_e[:,1] = B[:,1] # B_Fx_A1 same as B_A1
+        #B_e[:,1] = B[:,1] # B_Fx_A1 same as B_A1
+        B_e[:,1] = [1,0,-azimuth1.y] # Test
         B_e[:,2] = [0, 1, azimuth1.x] # B_Fy_A1
-        B_e[:,3] = B[:,2] # B_Fx_A2 same as B_A2
+        #B_e[:,3] = B[:,2] # B_Fx_A2 same as B_A2
+        B_e[:,3] = [1, 0, -azimuth2.y] # Test
         B_e[:,4] = [0, 1, azimuth2.x] # B_Fy_A2
         
         # Implementing weight matrix and choosing weights
@@ -115,6 +118,8 @@ class ThrustAllocator:
                 alpha_cmd[i] = alpha_now[i]
                 continue
             
+            if alpha_now is None: # Test
+                alpha_now = np.array([th.alpha0 for th in self.thrusters]) # Test
             # Angle ambiguity
             # To solve angle ambiguity, the closest angle to alpha_now is chosen
             # Positive thrust at alpha and negative thrust at alpha + pi produce the same force
