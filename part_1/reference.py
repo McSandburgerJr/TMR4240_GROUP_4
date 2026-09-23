@@ -74,6 +74,12 @@ class ReferenceModel:
         wn, zeta= cfg.wn, cfg.zeta
 
         return wn**2*(r-x1) - 2*zeta*wn*x2
+    
+    @staticmethod
+
+    def third_order_jerk(cfg: RefAxisConfig, x1, x2, x3, r):
+        wn, zeta = cfg.wn, cfg.zeta
+        return (wn**3)*(r-x1) - (2*zeta+1)*wn*x3 - (2*zeta+1)*wn**2*x2
 
     def step(
         self, t: float, dt: float, eta_cmd: np.ndarray
@@ -83,20 +89,19 @@ class ReferenceModel:
 
         # N, E 
         for idx, r in ((0,N_cmd), (1,E_cmd)):
-            x1, x2 = self.eta_ref[idx], self.nu_ref[idx]
-            x2_dot = self._second_order_accerleration(self.cfg_xy, x1, x2, r)
+            x1, x2, x3 = self.eta_ref[idx], self.nu_ref[idx], self.acc_ref[idx]
+            x3_dot = self.third_order_jerk(self.cfg_xy, x1, x2, x3, r)
             self.eta_ref[idx] = x1 + x2*dt
-            self.nu_ref[idx] = x2 + dt*x2_dot
-            self.acc_ref[idx] = x2_dot
+            self.nu_ref[idx] = x2 + x3*dt
+            self.acc_ref[idx] = x3 + x3_dot*dt
 
         # psi - yaw
         psi_error = self._wrap_to_pi(psi_cmd - self.eta_ref[5])
         r = self.eta_ref[5] + psi_error
-        x1, x2 = self.eta_ref[5], self.nu_ref[5]
-        x2_dot = self._second_order_accerleration(self.cfg_psi, x1, x2, r)
-        self.eta_ref[5] = x1 + x2*dt
-        self.nu_ref[5] = x2 + x2_dot*dt
-        self.acc_ref[5] = x2_dot
-
+        x1, x2, x3 = self.eta_ref[5], self.nu_ref[5], self.acc_ref[5]
+        x3_dot = self.third_order_jerk(self.cfg_psi, x1, x2, x3, r)
+        self.eta_ref[5] = self._wrap_to_pi(x1 + x2*dt)
+        self.nu_ref[5] = x2 + x3*dt
+        self.acc_ref[5] = x3 + x3_dot*dt
     
         return self.eta_ref, self.nu_ref, self.acc_ref

@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from models.thruster_dynamics import ThrusterSet
-from part_1.config import SimConfig, default_thrusters_gunnerus3
+from part_1.config import SimConfig, PIDGains, default_thrusters_gunnerus3
 from .utils import wrap_angle_pi
 
 DT = 0.05

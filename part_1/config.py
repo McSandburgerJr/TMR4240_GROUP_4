@@ -25,7 +25,7 @@ so that every simulation can be reconfigured by editing this one file and
         Ki: np.ndarray = ...
         Kd: np.ndarray = ...
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -58,7 +58,7 @@ class RefAxisConfig:
     # TODO (students): wn below is a placeholder, NOT a tuned value. Choose
     # the natural frequency yourself and justify it in the report (see the
     # project text, Reference Model section).
-    wn: float = 0.43                    # natural frequency [rad/s] (placeholder)
+    wn: float = 0.1                     # natural frequency [rad/s] (placeholder)
     zeta: float = 1.0                   # damping ratio [-]
     rate_limit: Optional[float] = None  # max |x_dot| (m/s or rad/s); None = off
 
@@ -73,3 +73,9 @@ def default_thrusters_gunnerus3() -> list[ThrusterConfig]:
         ThrusterConfig("Azimuth_2",  "azimuth", x=-13.0, y=-3.0,
                        u_max=80000,  u_rate=10000, rot_speed=0.2094, alpha0=0.0),
     ]
+
+@dataclass  
+class PIDGains:
+        Kp: np.ndarray = field(default_factory=lambda: np.array([1e4,1e4,5e5]))   
+        Ki: np.ndarray = field(default_factory=lambda: np.array([1e2,1e2,5e3]))
+        Kd: np.ndarray = field(default_factory=lambda: np.array([1e5,1e5,9e6]))
