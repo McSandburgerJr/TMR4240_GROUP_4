@@ -61,13 +61,17 @@ class DPController:
         self.Kp = np.asarray(PIDGains().Kp, dtype=float)
         self.Ki = np.asarray(PIDGains().Ki, dtype=float)
         self.Kd = np.asarray(PIDGains().Kd, dtype=float)
+        self.K_aw = np.where(self.Kp > 0, 1.0/self.Kp, 0.0)
+
         self.reset()
 
     def reset(self) -> None:
         """Optional: reset internal states (integrators, filters) before a run."""
         self.integral = np.zeros(3)               # NED integral [N, E, psi]
+        self._u_cmd = np.zeros(3)
+        self.sat_log = []
         self.last_pid_body = {k: np.zeros(6) for k in ("P", "I", "D")}
-        pass
+        
 
     @staticmethod
 
@@ -86,7 +90,7 @@ class DPController:
         # Proportional
         P = self.Kp* error
 
-        #Integral
+        #Integral 
         self.integral += error*dt
         I = self.Ki * self.integral
 
@@ -127,9 +131,22 @@ class DPController:
         P, I, D = self.PID(self, error, error_dot, dt)
 
         P, I, D = R.T @ P, R.T @ I, R.T @ D 
-        tau = np.zeros(6)
-        tau[DOF] = P + I + D        
-        return tau
+        tau_d = np.zeros(6)
+        tau_d[DOF] = P + I + D
+        self._u_cmd = tau_d[DOF].copy()
 
-tau = [100,100, 0, 0, 0, 100]
+
+        for k, v in (("P", P), ("I", I), ("D", D)):
+            self.last_pid_body[k] = np.zeros(6)
+            self.last_pid_body[k][DOF] = v
+
+        return tau_d
+
+    def apply_external_aw(self, tau_applied, psi, dt):
+        """Anti Windup with backcalculations : Integral -= K_aw(u-u_a) dt, with (u-u_a) rotated to NED"""
+        u_a = tau_applied[DOF]
+        du_body = self._u_cmd - u_a
+        self.sat_log.append(bool(np.any(np.abs(du_body) > 1e-6 * (np.abs(self._u_cmd) + 1.0))))
+        du_ned = self.Rz(psi) @ du_body
+        self.integral -= self.K_aw * du_ned * dt
      

@@ -58,7 +58,7 @@ class RefAxisConfig:
     # TODO (students): wn below is a placeholder, NOT a tuned value. Choose
     # the natural frequency yourself and justify it in the report (see the
     # project text, Reference Model section).
-    wn: float = 0.43                    # natural frequency [rad/s] (placeholder)
+    wn: float = 0.1                     # natural frequency [rad/s] (placeholder)
     zeta: float = 1.0                   # damping ratio [-]
     rate_limit: Optional[float] = None  # max |x_dot| (m/s or rad/s); None = off
 
@@ -76,6 +76,6 @@ def default_thrusters_gunnerus3() -> list[ThrusterConfig]:
 
 @dataclass  
 class PIDGains:
-        Kp: np.ndarray = field(default_factory=lambda: np.array([1e4,1e4,1e5]))
-        Ki: np.ndarray = field(default_factory=lambda: np.array([1e2,1e2,1e3]))
-        Kd: np.ndarray = field(default_factory=lambda: np.array([1e5,1e5,1e6]))
+        Kp: np.ndarray = field(default_factory=lambda: np.array([1e4,1e4,5e5]))   
+        Ki: np.ndarray = field(default_factory=lambda: np.array([1e2,1e2,5e3]))
+        Kd: np.ndarray = field(default_factory=lambda: np.array([1e5,1e5,9e6]))
