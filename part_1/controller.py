@@ -45,7 +45,8 @@ constructor defaults. Tuning only inside ``run_case_part1.py`` will pass your
 own runs but fail the checks.
 """
 import numpy as np
-from part_1.config import PIDGains
+from scipy.linalg import solve_continuous_are  #Ricatti solver
+from part_1.config import PIDGains, LQRWeights, ControllerConfig
 
 DOF = [0,1,5]
 
@@ -63,6 +64,15 @@ class DPController:
         self.Kd = np.asarray(PIDGains().Kd, dtype=float)
         self.K_aw = np.where(self.Kp > 0, 1.0/self.Kp, 0.0)
 
+        M_RB = np.diag([5.741e5, 5.741e5, 4.124e7])
+        M_A = np.array([[2.66e4, 0, 0],[0,1.326e5, -4.733e5], [0, -5.712e5, 1.332e7]])
+
+        self.M = M_RB + M_A
+        self.D = np.diag([2.235e4, 1.114e5, 9.748e6])
+
+        self.K_lqr = self.design_lqr(LQRWeights())
+        self.use_lqr = ControllerConfig.use_lqr
+        self.use_coriolis_ff = ControllerConfig.use_coriolis_ff
         self.reset()
 
     def reset(self) -> None:
@@ -83,8 +93,6 @@ class DPController:
                          [s, c, 0],
                          [0, 0, 1]])
     
-    @staticmethod 
-
     def PID(self, error : np.array, error_dot : np.array, dt: float) -> np.array:
 
         # Proportional
@@ -101,8 +109,55 @@ class DPController:
         
         return P, I, D
 
+    @staticmethod 
+    def Cor3(nu, M):
+        u, v, r = nu
+        m23 = 0.5 * (M[1,2] + M[2,1])
+        return np.array([[0, 0, -M[1,1]*v -m23 *r],
+                         [0, 0, M[0,0] *u],
+                         [M[1,1] * v +m23*r, -M[0,0] *u, 0.0]])
 
+    def FF(self, eta_d, eta_dot_d, eta_ddot_d):
+        psi_d = eta_d[5]
+        r_d = eta_dot_d[2]
+        R_d = self.Rz(psi_d)
 
+        S = np.array([[0, -r_d, 0],[r_d, 0, 0],[0,0,0]])
+        nu_d = R_d.T @ eta_dot_d
+        nu_dot_d = R_d.T @ eta_ddot_d - S @ nu_d
+        tau_ff = self.M @ nu_dot_d + self.D @ nu_d
+        tau_ff += self.Cor3(nu_d, self.M) @ nu_d
+        return tau_ff
+    
+    def design_lqr(self, weights: LQRWeights) -> np.ndarray:
+        Q, R = weights.Q , weights.R
+        Z, I = np.zeros((3,3)), np.eye(3)  # Building block for matrices
+        M_inv = np.linalg.inv(self.M)
+        A_lin = np.block([[Z, I, Z],
+                          [Z, Z, I],
+                          [Z, Z, -M_inv@self.D]])
+        B_lin = np.vstack([Z, Z, M_inv])
+        P = solve_continuous_are(A_lin, B_lin, Q, R)   # solves A^T P + P A - P B R^-1 B^T P + Q = 0
+        K = np.linalg.solve(R, B_lin.T @ P)         # K = R^-1 B^T P
+        return K
+
+    def LQR(self, eta, nu, eta_ref, eta_dot_d, dt):
+
+        psi = eta[5]
+        R = self.Rz(psi)
+
+        e_ned = eta_ref[DOF]-eta[DOF]
+        e_ned[2] = np.arctan2(np.sin(e_ned[2]), np.cos(e_ned[2]))
+
+        self.integral += e_ned *dt
+
+        z = R.T @ self.integral
+        e = R.T @ e_ned
+        nu_err = R.T @ eta_dot_d - nu[DOF]
+        x = np.hstack([z, e, nu_err])
+
+        tau = self.K_lqr @ x
+        return tau
 
     def compute(
         self,
@@ -118,28 +173,38 @@ class DPController:
         # Return the (6,) desired BODY wrench — fill in tau_d[0] = Fx,
         # tau_d[1] = Fy, tau_d[5] = Mz and leave the rest zero.
         psi = eta[5]
-        R = self.Rz(psi)
+        r = nu[5]
 
+        R = self.Rz(psi)
         error = eta_ref[DOF] - eta[DOF]
         error[2] = np.arctan2(np.sin(error[2]), np.cos(error[2]))
 
         eta_dot = R @ nu[DOF]
-        eta_dot_ref = np.zeros(3) if nu_ref is None else nu_ref[DOF]
-        error_dot = eta_dot_ref - eta_dot
+        eta_dot_d = np.zeros(3) if nu_ref is None else nu_ref[DOF]
+        eta_ddot_d = np.zeros(3) if acc_ref is None else acc_ref[DOF]
+        error_dot = eta_dot_d - eta_dot
 
-        #Rotate error to error_BF
-        P, I, D = self.PID(self, error, error_dot, dt)
+        
 
-        P, I, D = R.T @ P, R.T @ I, R.T @ D 
         tau_d = np.zeros(6)
-        tau_d[DOF] = P + I + D
+
+        if self.use_lqr:
+            tau_d[DOF] = self.LQR(eta, nu, eta_ref, eta_dot_d, dt)
+        else:
+        #Rotate error to error_BF
+            P, I, D = self.PID(error, error_dot, dt)
+    
+            P, I, D = R.T @ P, R.T @ I, R.T @ D 
+            tau_d[DOF] = P + I + D
+            for k, v in (("P", P), ("I", I), ("D", D)):
+                self.last_pid_body[k] = np.zeros(6)
+                self.last_pid_body[k][DOF] = v
+            if self.use_coriolis_ff:
+                tau_d[DOF] += self.FF(eta_ref, eta_dot_d, eta_ddot_d)  #Feed-Forward
+
+
         self._u_cmd = tau_d[DOF].copy()
-
-
-        for k, v in (("P", P), ("I", I), ("D", D)):
-            self.last_pid_body[k] = np.zeros(6)
-            self.last_pid_body[k][DOF] = v
-
+        
         return tau_d
 
     def apply_external_aw(self, tau_applied, psi, dt):
