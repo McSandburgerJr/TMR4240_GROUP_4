@@ -90,17 +90,18 @@ class LQRWeights:
     
     @property
     def Q(self) -> np.ndarray:
-        """9x9 state weight, order [z, e, nu_err]."""
+        """9x9 state weight, order [z, e, nu_err]"""
         return np.diag(np.r_[1 / self.max_int**2,
                              1 / self.max_err**2,
                              1 / self.max_vel**2])
 
     @property
     def R(self) -> np.ndarray:
-        """3x3 input weight."""
+        """3x3 input weight"""
         return np.diag(1 / self.max_tau**2)
 
 @dataclass
 class ControllerConfig:
-    use_lqr: bool = False          # True -> LQI, False -> PID w/FF
-    use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feedforward
+    use_lqr: bool = True           # True -> LQR with integral effect, False -> PID
+    use_feed_forward: bool = True  # True -> Using feed forward
+    use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feed forward

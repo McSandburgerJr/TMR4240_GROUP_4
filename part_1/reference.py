@@ -56,28 +56,39 @@ class ReferenceModel:
 
     def reset(self, eta0: np.ndarray) -> None:
         """Initialize the reference at the vessel's current (6,) state."""
+        
         self.eta_ref = np.asarray(eta0, dtype=float).reshape(6).copy()
         self.nu_ref = np.zeros(6)
         self.acc_ref = np.zeros(6)
 
     @staticmethod
 
-    def _wrap_to_pi(angle :float) -> float:                          
-        """Wrapping the boundaries of psi from [0,2pi) to (-pi, pi]"""
+    def wrap_to_pi(angle :float) -> float:                          
+        """Wrapping the boundaries of the angle to [-pi, pi)"""
         return (angle + np.pi) % (2*np.pi) - np.pi
 
-    @staticmethod
+    # @staticmethod
 
-    def _second_order_accerleration(cfg: RefAxisConfig, x1, x2, r): 
-        """Solving the second-order low-pass filter for desired accelerations. x1 = eta_desired, x2 = eta_dot_desired, r = eta_cmd"""
+    # def second_order_accerleration(cfg: RefAxisConfig, x1, x2, r): 
+    #     """Solving the second-order low-pass filter for desired accelerations. x1 = eta_desired, x2 = eta_dot_desired, r = eta_cmd"""
 
-        wn, zeta= cfg.wn, cfg.zeta
+    #     wn, zeta= cfg.wn, cfg.zeta
 
-        return wn**2*(r-x1) - 2*zeta*wn*x2
+    #     return wn**2*(r-x1) - 2*zeta*wn*x2
     
     @staticmethod
 
-    def third_order_jerk(cfg: RefAxisConfig, x1, x2, x3, r):
+    def third_order_jerk(cfg: RefAxisConfig, x1: float, x2: float, x3: float, r: float):
+        """Solving the third-order low-pass filter for desired jerk.
+        Args: 
+            cfg     : RefAxisConfig w/ natural frequency wn [rad/s] and damping ratio zeta
+            x1      : desired position [m] or rotation [rad] 
+            x2      : desired velocity [m/s]
+            x3      : desired acceleration [m/s^2]
+            r       : commanded setpoint
+        Returns:
+            x3_dot  : desired jerk [m/s^3]
+        """
         wn, zeta = cfg.wn, cfg.zeta
         return (wn**3)*(r-x1) - (2*zeta+1)*wn*x3 - (2*zeta+1)*wn**2*x2
 
@@ -96,12 +107,13 @@ class ReferenceModel:
             self.acc_ref[idx] = x3 + x3_dot*dt
 
         # psi - yaw
-        psi_error = self._wrap_to_pi(psi_cmd - self.eta_ref[5])
+        psi_error = self.wrap_to_pi(psi_cmd - self.eta_ref[5])
         r = self.eta_ref[5] + psi_error
         x1, x2, x3 = self.eta_ref[5], self.nu_ref[5], self.acc_ref[5]
         x3_dot = self.third_order_jerk(self.cfg_psi, x1, x2, x3, r)
-        self.eta_ref[5] = self._wrap_to_pi(x1 + x2*dt)
+        self.eta_ref[5] = self.wrap_to_pi(x1 + x2*dt)
         self.nu_ref[5] = x2 + x3*dt
         self.acc_ref[5] = x3 + x3_dot*dt
-    
+
+        
         return self.eta_ref, self.nu_ref, self.acc_ref
