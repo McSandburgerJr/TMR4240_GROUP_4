@@ -42,6 +42,7 @@ and alpha_rw are the relative wind speed and angle in the BODY frame.
 from pathlib import Path
 from typing import Dict, Tuple
 import numpy as np
+from part_1.config import WindConfig
 
 # Wind coefficient table file path
 _WIND_COEFF_FILE = Path(__file__).resolve().parent.parent / "data" / "wind_coeff.csv"
@@ -98,68 +99,66 @@ class Wind:
         # Initialize random number generator for the slow wind component
         self.rng = np.random.default_rng(self.seed)
         self.V_slow = 0.0
+        self.V_max = WindConfig().V_max  # Maximum wind speed [m/s] from configuration 
 
     def step(
-        self,
-        t: float,
-        dt: float,
-        eta: np.ndarray,
-        nu: np.ndarray,
-    ) -> Tuple[np.ndarray, Dict[str, float]]:
-        # TODO: Replace this placeholder with your wind load model.
-        # Default: no wind loads.
-
-        if self.sigma_slow > 0.0 and self.tau_slow > 0.0:
-            # White noise
-            w_std = np.sqrt(2.0 * (self.sigma_slow ** 2) / self.tau_slow)
-            w = self.rng.normal(0.0, w_std)
+            self,
+            t: float,
+            dt: float,
+            eta: np.ndarray,
+            nu: np.ndarray,
+        ) -> Tuple[np.ndarray, Dict[str, float]]:
             
-            # Differential equation 
-            V_slow_dot = -(1.0 / self.tau_slow) * self.V_slow + w
+            # Slowly varying wind speed (exact discrete-time Ornstein-Uhlenbeck / Gauss-Markov)
+            if self.sigma_slow > 0.0 and self.tau_slow > 0.0:
+                a = np.exp(-dt / self.tau_slow)
+                z = self.rng.normal(0.0, 1.0)
+                self.V_slow = a * self.V_slow + self.sigma_slow * np.sqrt(1.0 - a**2) * z
+            else:
+                self.V_slow = 0.0
+
+            # Total ambient wind speed (bounded)
+            V_w = np.clip(self.mean_speed + self.V_slow, 0.0, self.V_max)
+
+            # Ambient wind direction in NED (convert "from" -> "towards")
+            if self.semantics == "from":
+                beta_ned = (self.beta + np.pi) % (2.0 * np.pi)
+            else:
+                beta_ned = self.beta % (2.0 * np.pi)
+
+            # Ambient wind velocity components in BODY frame
+            psi = eta[5]
+            u_w = V_w * np.cos(beta_ned - psi)
+            v_w = V_w * np.sin(beta_ned - psi)
+
+            # Relative wind velocity in BODY frame (V_wind - V_vessel)
+            u_rw = u_w - nu[0]
+            v_rw = v_w - nu[1]
             
-            # Euler integration
-            self.V_slow += V_slow_dot * dt
-        else:
-            self.V_slow = 0.0
+            U_rw = np.hypot(u_rw, v_rw)
 
-        # Sum of mean speed and turbulence
-        V_w = max(0.0, min(self.mean_speed +  self.V_slow, 25.0))  # Limit the wind speed to a maximum of 25 m/s
+            # Relative wind angle (Direction TOWARDS which relative wind blows in BODY frame)
+            alpha_body_rad = np.arctan2(v_rw, u_rw)
+            alpha_body_deg = np.degrees(alpha_body_rad) % 360.0
 
-        # Problamatic: from x towards, so convert to "towards" semantics for the calculations
-        if self.semantics == "from":
-            beta_ned = (self.beta + np.pi) % (2 * np.pi)
-        else:
-            beta_ned = self.beta % (2 * np.pi)
+            # Interpolate wind coefficients for the current relative angle
+            C_alpha = np.empty(6)
+            for i in range(6):
+                C_alpha[i] = np.interp(
+                    alpha_body_deg, 
+                    self.alpha_deg_table, 
+                    self.C6_table[:, i], 
+                    period=360.0
+                )
 
-        # Take psi from NED frame    
-        psi = eta[5] 
+            # Compute final wind loads in BODY frame
+            tau_w6 = (U_rw**2) * C_alpha
 
-        # Compute wind components in NED frame
-        u_w = V_w * np.cos(beta_ned - psi)
-        v_w = V_w * np.sin(beta_ned - psi)
-
-        # Compute relative wind in BODY frame
-        u_rw = nu[0] - u_w
-        v_rw = nu[1] - v_w
-
-        
-        U_rw = np.sqrt(u_rw**2 + v_rw**2) # Relative wind speed magnitude in BODY frame
-        alpha_body_rad = np.arctan2(-v_rw, -u_rw) # Relative wind angle in BODY frame (rad)
-        alpha_body_deg = np.degrees(alpha_body_rad) % 360.0 # Relative wind angle in BODY frame (deg)
-
-        # matrix of wind loads in BODY frame
-        tau_w6 = np.zeros(6)
-        C_alpha = np.zeros(6)
-
-        # I wind coefficients for the current relative wind angle
-        for i in range(6):
-            C_alpha[i] = np.interp(alpha_body_deg, self.alpha_deg_table, self.C6_table[:, i], period=360.0)
-
-        # Compute wind loads in BODY frame (C has rho in it, A, the distance...)   
-        tau_w6 = (U_rw**2) * C_alpha
-        info = {
-            "U": float(V_w),
-            "beta_ned": float(beta_ned),
-            "alpha_body": float(alpha_body_rad)
-        }
-        return tau_w6, info
+            # Logging info
+            info = {
+                "U": float(V_w),
+                "beta_ned": float(beta_ned),
+                "alpha_body": float(alpha_body_rad)
+            }
+            
+            return tau_w6, info
