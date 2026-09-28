@@ -105,3 +105,7 @@ class ControllerConfig:
     use_lqr: bool = True           # True -> LQR with integral effect, False -> PID
     use_feed_forward: bool = True  # True -> Using feed forward
     use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feed forward
+
+@dataclass
+class WindConfig:
+    V_max: float = 25.0        # maximum wind speed [m/s]
