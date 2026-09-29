@@ -52,6 +52,9 @@ class ThrustAllocator:
         u_cmd = np.zeros(n)
         alpha_cmd = np.zeros(n)
         
+        if alpha_now is None: # alpha_now[i] in line 131-132 crashes if alpha_now is None, which it is by default
+            alpha_now = np.array([th.alpha0 for th in self.thrusters])
+        
         # Weighted least-squares method 
         B = np.zeros((3,n)) # Overview of each thrusters contribution to the body wrench
         tau_3d = tau_d[[0, 1, 5]]
