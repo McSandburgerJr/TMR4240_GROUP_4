@@ -62,7 +62,7 @@ class DPController:
         self.Kp = np.asarray(PIDGains().Kp, dtype=float)
         self.Ki = np.asarray(PIDGains().Ki, dtype=float)
         self.Kd = np.asarray(PIDGains().Kd, dtype=float)
-        self.K_aw = np.where(self.Kp > 0, 1.0/self.Kp, 0.0)
+
 
         M_RB = np.diag([5.741e5, 5.741e5, 4.124e7])
         M_A = np.array([[2.66e4, 0, 0],[0,1.326e5, -4.733e5], [0, -5.712e5, 1.332e7]])
@@ -73,6 +73,13 @@ class DPController:
         self.use_lqr = ControllerConfig.use_lqr
         self.use_feed_forward = ControllerConfig.use_feed_forward
         self.use_coriolis_ff = ControllerConfig.use_coriolis_ff
+        if self.use_lqr:
+            c_aw = 0.4/10
+            K_z = np.diag(self.K_lqr[:, :3])          # integral gains (diagonal of first 3 columns)
+            self.K_aw = np.where(K_z > 0, c_aw / K_z, 0.0)
+        else:
+            self.K_aw = np.where(self.Ki > 0, 1 / self.Kp, 0.0)
+
         self.reset()
 
     def reset(self) -> None:
@@ -194,15 +201,15 @@ class DPController:
         psi = eta[5]
         R = self.Rz(psi)
 
-        e_ned = eta[DOF]- eta_ref[DOF]
-        e_ned[2] = np.arctan2(np.sin(e_ned[2]), np.cos(e_ned[2]))
+        e = eta[DOF]- eta_ref[DOF]
+        e[2] = np.arctan2(np.sin(e[2]), np.cos(e[2]))
 
-        self.integral += e_ned *dt
+        self.integral += e *dt
 
-        z = R.T @ self.integral
-        e = R.T @ e_ned
-        nu_err = nu[DOF] - R.T @ eta_dot_d 
-        x = np.hstack([z, e, nu_err])
+        z_b = R.T @ self.integral
+        e_b = R.T @ e
+        e_b_dot = nu[DOF] - R.T @ eta_dot_d 
+        x = np.hstack([z_b, e_b, e_b_dot])
 
         tau_LQR = -self.K_lqr @ x
         return tau_LQR
@@ -237,9 +244,8 @@ class DPController:
         else:
         #Rotate error_NED to error_BF
             P, I, D = self.PID(error, error_dot, dt)
-    
-            P, I, D = R.T @ P, R.T @ I, R.T @ D 
-            tau_d[DOF] = P + I + D
+            tau_PID = R.T @ (P+I+D) 
+            tau_d[DOF] = tau_PID
         
         if self.use_feed_forward:
             tau_d[DOF] += self.FF(eta_ref, eta_dot_d, eta_ddot_d)  #Feed-Forward
