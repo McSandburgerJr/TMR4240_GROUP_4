@@ -61,11 +61,6 @@ class ReferenceModel:
         self.nu_ref = np.zeros(6)
         self.acc_ref = np.zeros(6)
 
-    @staticmethod
-
-    def wrap_to_pi(angle :float) -> float:                          
-        """Wrapping the boundaries of the angle to [-pi, pi)"""
-        return (angle + np.pi) % (2*np.pi) - np.pi
 
     # @staticmethod
 
@@ -107,11 +102,12 @@ class ReferenceModel:
             self.acc_ref[idx] = x3 + x3_dot*dt
 
         # psi - yaw
-        psi_error = self.wrap_to_pi(psi_cmd - self.eta_ref[5])
+        psi_error_uw = psi_cmd - self.eta_ref[5]
+        psi_error = np.arctan2(np.sin(psi_error_uw), np.cos(psi_error_uw))
         r = self.eta_ref[5] + psi_error
         x1, x2, x3 = self.eta_ref[5], self.nu_ref[5], self.acc_ref[5]
         x3_dot = self.third_order_jerk(self.cfg_psi, x1, x2, x3, r)
-        self.eta_ref[5] = self.wrap_to_pi(x1 + x2*dt)
+        self.eta_ref[5] = np.arctan2(np.sin(x1 + x2*dt),np.cos(x1 + x2*dt))
         self.nu_ref[5] = x2 + x3*dt
         self.acc_ref[5] = x3 + x3_dot*dt
 
