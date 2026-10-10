@@ -56,15 +56,60 @@ class ReferenceModel:
 
     def reset(self, eta0: np.ndarray) -> None:
         """Initialize the reference at the vessel's current (6,) state."""
+        
         self.eta_ref = np.asarray(eta0, dtype=float).reshape(6).copy()
         self.nu_ref = np.zeros(6)
         self.acc_ref = np.zeros(6)
+
+
+    # @staticmethod
+
+    # def second_order_accerleration(cfg: RefAxisConfig, x1, x2, r): 
+    #     """Solving the second-order low-pass filter for desired accelerations. x1 = eta_desired, x2 = eta_dot_desired, r = eta_cmd"""
+
+    #     wn, zeta= cfg.wn, cfg.zeta
+
+    #     return wn**2*(r-x1) - 2*zeta*wn*x2
+    
+    @staticmethod
+
+    def third_order_jerk(cfg: RefAxisConfig, x1: float, x2: float, x3: float, r: float):
+        """Solving the third-order low-pass filter for desired jerk.
+        Args: 
+            cfg     : RefAxisConfig w/ natural frequency wn [rad/s] and damping ratio zeta
+            x1      : desired position [m] or rotation [rad] 
+            x2      : desired velocity [m/s]
+            x3      : desired acceleration [m/s^2]
+            r       : commanded setpoint
+        Returns:
+            x3_dot  : desired jerk [m/s^3]
+        """
+        wn, zeta = cfg.wn, cfg.zeta
+        return (wn**3)*(r-x1) - (2*zeta+1)*wn*x3 - (2*zeta+1)*wn**2*x2
 
     def step(
         self, t: float, dt: float, eta_cmd: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         # TODO: Replace this pass-through placeholder with your reference model.
-        self.eta_ref = np.asarray(eta_cmd, dtype=float).reshape(6).copy()
-        self.nu_ref = np.zeros(6)
-        self.acc_ref = np.zeros(6)
+        N_cmd, E_cmd, psi_cmd = eta_cmd[0], eta_cmd[1], eta_cmd[5]
+
+        # N, E 
+        for idx, r in ((0,N_cmd), (1,E_cmd)):
+            x1, x2, x3 = self.eta_ref[idx], self.nu_ref[idx], self.acc_ref[idx]
+            x3_dot = self.third_order_jerk(self.cfg_xy, x1, x2, x3, r)
+            self.eta_ref[idx] = x1 + x2*dt
+            self.nu_ref[idx] = x2 + x3*dt
+            self.acc_ref[idx] = x3 + x3_dot*dt
+
+        # psi - yaw
+        psi_error_uw = psi_cmd - self.eta_ref[5]
+        psi_error = np.arctan2(np.sin(psi_error_uw), np.cos(psi_error_uw))
+        r = self.eta_ref[5] + psi_error
+        x1, x2, x3 = self.eta_ref[5], self.nu_ref[5], self.acc_ref[5]
+        x3_dot = self.third_order_jerk(self.cfg_psi, x1, x2, x3, r)
+        self.eta_ref[5] = np.arctan2(np.sin(x1 + x2*dt),np.cos(x1 + x2*dt))
+        self.nu_ref[5] = x2 + x3*dt
+        self.acc_ref[5] = x3 + x3_dot*dt
+
+        
         return self.eta_ref, self.nu_ref, self.acc_ref

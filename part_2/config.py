@@ -17,8 +17,8 @@ from this file and ``run_case_part_2.py`` without touching the engine.
 from dataclasses import dataclass, field
 from math import pi
 from typing import Any, Dict, Optional
-
 from models.thruster_dynamics import ThrusterConfig
+import numpy as np
 
 
 @dataclass
@@ -100,3 +100,93 @@ def default_thrusters_part_2() -> list[ThrusterConfig]:
                        u_max=80_000.0, u_rate=10_000.0,
                        rot_speed=rotation_speed, alpha0=0.0),
     ]
+
+@dataclass  
+class PIDGains:
+    Kp: np.ndarray = field(default_factory=lambda: np.array([9.61e4, 1.13e5, 8.73e6]))
+    Ki: np.ndarray = field(default_factory=lambda: np.array([3.84e3, 4.52e3, 3.49e5]))
+    Kd: np.ndarray = field(default_factory=lambda: np.array([4.58e5, 4.54e5, 3.39e7]))
+
+@dataclass
+class LQRWeights: 
+    #Using Bryons rule
+    max_int: np.ndarray = field(default_factory=lambda: np.array([50.0, 50.0, np.deg2rad(100.0)]))  # integral states [m*s, m*s, rad*s]
+    max_err: np.ndarray = field(default_factory=lambda: np.array([1.0, 1.0, np.deg2rad(2.0)]))      # position/heading error [m, m, rad]
+    max_vel: np.ndarray = field(default_factory=lambda: np.array([0.5, 0.5, np.deg2rad(1.0)]))      # velocity error [m/s, m/s, rad/s]
+    max_tau: np.ndarray = field(default_factory=lambda: np.array([50e3, 50e3, 500e3]))              # thrust [N, N, Nm]
+    
+    @property
+    def Q(self) -> np.ndarray:
+        """9x9 state weight, order [z, e, nu_err]"""
+        return np.diag(np.r_[1 / self.max_int**2,
+                             1 / self.max_err**2,
+                             1 / self.max_vel**2])
+
+    @property
+    def R(self) -> np.ndarray:
+        """3x3 input weight"""
+        return np.diag(1 / self.max_tau**2)
+
+@dataclass
+class ControllerConfig:
+    use_lqr: bool = True           # True -> LQR with integral effect, False -> PID
+    use_feed_forward: bool = True  # True -> Using feed forward
+    use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feed forward
+
+
+@dataclass
+class NPOConfig:
+    omega_0 : np.ndarray = field(default_factory=lambda: np.full(3, 2*np.pi/ 8.0))
+    zeta: np.ndarray = field(default_factory= lambda: np.full(3, 0.1))
+    
+    # Wave filter design
+    cutoff_ratio : float = 1.25
+    zeta_n: np.ndarray = field(default_factory= lambda: np.full(3, 1.0))
+    
+    # Bias Model
+    T_b : float = 1000
+
+    #Velocity and bias gains
+    nu_gain_scale: float = 0.1          # K_3 = scale * mass
+    bias_ratio: float = 0.1             # K_4 = ratio * K_3
+
+    @property
+    def omega_c(self):
+        return self.cutoff_ratio * self.omega_0
+
+    @property
+    def T_inv(self):
+        return np.eye(3)/self.T_b
+    
+    @property
+    def A_w(self):
+        Z, I = np.zeros((3,3)), np.eye(3)
+        Omega = self.omega_0 * I  
+        Lambda = self.zeta * I
+        return np.block([[Z, I],[-Omega @ Omega, -2 * Lambda @ Omega]])
+    
+    @property
+    def C_w(self):
+        Z, I = np.zeros((3, 3)), np.eye(3)
+        return np.block([Z, I])
+
+    @property
+    def K_1(self):
+        k1 = 2* self.omega_c/self.omega_0 * (self.zeta - self.zeta_n)
+        k2 = 2*self.omega_0 *(self.zeta_n - self.zeta)
+        return np.vstack([np.diag(k1), np.diag(k2)])
+
+    @property
+    def K_2(self):
+        k3 = self.omega_c
+        return np.diag(k3)
+
+    def K_3(self, M):
+        m = np.diag(M)
+        m_xy = 0.5* (m[0]+m[1])
+        return self.nu_gain_scale*np.diag([m_xy,m_xy,m[2]])
+
+    def K_4(self,M):
+        return self.bias_ratio * self.K_3(M)
+    
+

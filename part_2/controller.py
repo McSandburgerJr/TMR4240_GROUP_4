@@ -50,8 +50,11 @@ Constructor contract — the automated checks (``python check.py --part 2``,
 so your final tuned gains must be the ``__init__`` defaults.  Gains set only
 in ``run_case_part_2.py`` reach your own runs but not the checks.
 """
+from scipy.linalg import solve_continuous_are  #Ricatti solver
+from part_2.config import PIDGains, LQRWeights, ControllerConfig
 import numpy as np
 
+DOF = [0,1,5]
 
 class DPController:
     """
@@ -62,11 +65,160 @@ class DPController:
     """
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.Kp = np.asarray(PIDGains().Kp, dtype=float)
+        self.Ki = np.asarray(PIDGains().Ki, dtype=float)
+        self.Kd = np.asarray(PIDGains().Kd, dtype=float)
+
+
+        M_RB = np.diag([5.741e5, 5.741e5, 4.124e7])
+        M_A = np.array([[2.66e4, 0, 0],[0,1.326e5, -4.733e5], [0, -5.712e5, 1.332e7]])
+
+        self.M = M_RB + M_A
+        self.D = np.diag([2.235e4, 1.114e5, 9.748e6])
+        self.K_lqr = self.design_lqr(LQRWeights())
+        self.use_lqr = ControllerConfig.use_lqr
+        self.use_feed_forward = ControllerConfig.use_feed_forward
+        self.use_coriolis_ff = ControllerConfig.use_coriolis_ff
+        if self.use_lqr:
+            c_aw = 0.4/10
+            K_z = np.diag(self.K_lqr[:, :3])          # integral gains (diagonal of first 3 columns)
+            self.K_aw = np.where(K_z > 0, c_aw / K_z, 0.0)
+        else:
+            self.K_aw = np.where(self.Ki > 0, 1 / self.Kp, 0.0)
+
+        self.reset()
 
     def reset(self) -> None:
         """Optional: reset internal states (integrators, filters) before a run."""
-        pass
+        self.integral = np.zeros(3)               # NED integral [N, E, psi]
+        self._u_cmd = np.zeros(3)
+        
+
+    @staticmethod
+
+    def Rz(psi: float)-> np.ndarray:
+        """Rotation matrix about z-axis : Body frame -> NED frame
+        Args: 
+            psi : Heading angle [rad]
+
+        Returns:
+            R   : (3,3) rotation matrix 
+        """
+
+        c, s = np.cos(psi), np.sin(psi)
+
+        return np.array([[c, -s, 0],
+                         [s, c, 0],
+                         [0, 0, 1]])
+    
+    def PID(self, error : np.array, error_dot : np.array, dt: float) -> np.array:
+        """Computing the proportional, integral and derivative terms of the PID
+        
+        Args:
+            error       : (n,) tracking error, e.g. eta - eta_ref
+            error_dot   : (n,) time derivative of the error, e.g. eta_dot - eta_d_d
+            dt          : time step [s]
+        
+        Returns: 
+            P, I, D     : (n,) each, is the three PID control force/moment contributions
+        """
+        # Proportional
+        P = -self.Kp* error
+
+        #Integral 
+        self.integral += error*dt
+        I = -self.Ki * self.integral
+
+        #Derivative
+        D = -self.Kd * error_dot
+        
+        return P, I, D
+
+    @staticmethod 
+    def Cor3(nu: np.array, M: np.array) -> np.ndarray:
+        """Computing the 3-DOF Coriolis-centripetal matrix C(nu)
+
+        Args: 
+            nu  : (3,) body-frame velocities [u,v,r] 
+            M   : (3,3) mass matrix (rigid body + added mass)
+        Returns:
+            C   : (3,3) skew-symmetric Coriolis-centripetal matrix.
+                The Coriolis force is C @ nu"""
+        u, v, r = nu
+        m23 = 0.5 * (M[1,2] + M[2,1])
+        return np.array([[0, 0, -M[1,1]*v -m23 *r],
+                         [0, 0, M[0,0] *u],
+                         [M[1,1] * v +m23*r, -M[0,0] *u, 0.0]])
+
+    def FF(self, eta_d: np.array, eta_dot_d: np.array, eta_ddot_d: np.array) -> np.ndarray:
+        """Model-based feedforward from the reference model:
+        
+        Args:
+            eta_d       : (6,) reference position and angle in NED (only hesding angle is used -> eta_d[5])
+            eta_dot_d   : (3,) reference velocity in NED [N_dot, E_dot, psi_dot]
+            eta_ddot_d  : (3,) reference acceleration in NED [N_ddot, E_ddot, psi_ddot]
+        Returns:
+            tau_FF      : (3,) feedforward forces/moment in BODY [X, Y, N]
+        """
+
+        psi_d = eta_d[5]
+        r_d = eta_dot_d[2]
+        R_d = self.Rz(psi_d)
+
+        S = np.array([[0, -r_d, 0],[r_d, 0, 0],[0,0,0]])
+        nu_d = R_d.T @ eta_dot_d
+        nu_dot_d = R_d.T @ eta_ddot_d - S @ nu_d
+        tau_ff = self.M @ nu_dot_d + self.D @ nu_d
+        if self.use_coriolis_ff:
+            tau_ff += self.Cor3(nu_d, self.M) @ nu_d
+        return tau_ff
+    
+    def design_lqr(self, weights: LQRWeights) -> np.ndarray:
+        """Design of LQR gain with integral effect (3DOF)
+        
+        Args:
+            weights : LQRWeights with Q (9,9) and R (3,3)
+        Returns:
+            K       : (3,9) state-feedback gain
+        """
+        Q, R = weights.Q , weights.R
+        Z, I = np.zeros((3,3)), np.eye(3)  # Building block for matrices
+        M_inv = np.linalg.inv(self.M)
+        A_lin = np.block([[Z, I, Z],
+                          [Z, Z, I],
+                          [Z, Z, -M_inv@self.D]])
+        B_lin = np.vstack([Z, Z, M_inv])
+        P = solve_continuous_are(A_lin, B_lin, Q, R)   # solves A^T P + P A - P B R^-1 B^T P + Q = 0
+        K = np.linalg.solve(R, B_lin.T @ P)         # K = R^-1 B^T P
+        return K
+
+    def LQR(self, eta:np.array, nu:np.array, eta_ref:np.array, eta_dot_d:np.array, dt:float) -> np.ndarray:
+        """Calculating the tau_d from LQR with integral action, tau_d = -K @ x 
+        
+        Args:
+            eta         : (6,) current posistion and rotations
+            nu          : (6,) current velocities
+            eta_ref     : (6,) desired position and rotations
+            eta_dot_d   : (6,) desired velocities
+            dt          : time step [s]
+        Returns:
+            tau_d       : (3,) body-frame desired forces/moments [X,Y,N]
+        """
+        psi = eta[5]
+        R = self.Rz(psi)
+
+        e = eta[DOF]- eta_ref[DOF]
+        e[2] = np.arctan2(np.sin(e[2]), np.cos(e[2]))
+
+        self.integral += e *dt
+
+        z_b = R.T @ self.integral
+        e_b = R.T @ e
+        e_b_dot = nu[DOF] - R.T @ eta_dot_d 
+        x = np.hstack([z_b, e_b, e_b_dot])
+
+        tau_LQR = -self.K_lqr @ x
+        return tau_LQR
 
     def compute(
         self,
@@ -81,4 +233,49 @@ class DPController:
         # TODO: Replace this placeholder with your DP controller.
         # Return the (6,) desired BODY wrench — fill in tau_d[0] = Fx,
         # tau_d[1] = Fy, tau_d[5] = Mz and leave the rest zero.
-        return np.zeros(6)
+        psi = eta[5]
+        R = self.Rz(psi)
+        error = eta[DOF] - eta_ref[DOF]
+        error[2] = np.arctan2(np.sin(error[2]), np.cos(error[2]))
+
+        eta_dot = R @ nu[DOF]
+        eta_dot_d = np.zeros(3) if nu_ref is None else nu_ref[DOF]
+        eta_ddot_d = np.zeros(3) if acc_ref is None else acc_ref[DOF]
+        error_dot = eta_dot - eta_dot_d
+
+        tau_d = np.zeros(6)
+
+        if self.use_lqr:
+            tau_d[DOF] = self.LQR(eta, nu, eta_ref, eta_dot_d, dt)
+        else:
+        #Rotate error_NED to error_BF
+            P, I, D = self.PID(error, error_dot, dt)
+            tau_PID = R.T @ (P+I+D) 
+            tau_d[DOF] = tau_PID
+        
+        if self.use_feed_forward:
+            tau_d[DOF] += self.FF(eta_ref, eta_dot_d, eta_ddot_d)  #Feed-Forward
+
+
+        self._u_cmd = tau_d[DOF].copy()
+
+        return tau_d
+
+    def apply_external_aw(self, tau_applied: np.array, psi: float , dt: float) -> None:
+        """Anti Windup with backcalculations called by simulation after each step
+        
+        Compares the commanded wrench (self._u_cmd) with the wrench actually
+        applied after thrust allocation and actuator limits (tau_applied).
+        When they differ (saturation), the integrator is pulled back so it
+        stops accumulating error the thrusters cannot act on.
+
+        Args:
+            tau_applied : (6,) wrench actually applied, body frame
+            psi         : current heading [rad]
+            dt          : time step [s] 
+        """
+        u_a = tau_applied[DOF]
+        du_body = self._u_cmd - u_a
+
+        du_ned = self.Rz(psi) @ du_body
+        self.integral += self.K_aw * du_ned * dt

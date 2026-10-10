@@ -24,8 +24,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
+from simulation.utils import Rz, wrap_angle_pi
+from part_2.control_plant_model import ControlPlantModel 
+from part_2.config import NPOConfig
 
-
+DOF = [0, 1 , 5]
 @dataclass
 class ObserverEstimate:
     eta: np.ndarray
@@ -65,12 +68,78 @@ class NonlinearPassiveObserver(Observer):
 
     name = "nonlinear_passive"
 
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self, conf=None, model=None, **kwargs):
+        conf = conf or NPOConfig(**kwargs)
+        model = model or ControlPlantModel()
+
+        self.A_w, self.C_w = conf.A_w, conf.C_w
+        self.M_inv = np.linalg.inv(model.M)
+        self.D = model.D_l
+        self.T_inv = conf.T_inv
+        self.K_1, self.K_2 = conf.K_1, conf.K_2
+        self.K_3, self.K_4 = conf.K_3(model.M), conf.K_4(model.M)
+
+        self.reset()
+
+
+    def reset(self, eta0=None):
+        self.xi_hat = np.zeros(6)
+        self.nu_hat = np.zeros(3)
+        self.b_hat = np.zeros(3)
+        if eta0 is None:
+            self.eta_hat = None
+        else:
+            self.eta_hat = np.asarray(eta0, dtype=float).reshape(6)[DOF]
+            self.eta_hat[2] = wrap_angle_pi(self.eta_hat[2])
+
+
+    def estimate_derivatives(self, y_tilde, tau, psi_m):
+        """
+        Args:
+        
+        
+        Returns:
+        """          
+        R = Rz(psi_m)
+
+        xi_hat_dot = self.A_w @ self.xi_hat + self.K_1 @ y_tilde
+        eta_hat_dot = R @ self.nu_hat + self.K_2 @ y_tilde
+        nu_hat_dot = -self.M_inv @ self.D @ self.nu_hat + self.M_inv @ R.T @ self.b_hat + self.M_inv @ tau + self.M_inv @ R.T @ self.K_3 @ y_tilde
+        b_hat_dot = -self.T_inv @ self.b_hat + self.K_4 @ y_tilde
+        
+        return xi_hat_dot, eta_hat_dot, nu_hat_dot, b_hat_dot
 
     def step(self, t, dt, eta_measured, tau_est):
+        """
+        Args:
+        
+        
+        Returns:
+        
+        """
         # TODO: implement the nonlinear passive observer.
-        return self._placeholder(eta_measured)
+        if self.eta_hat is None:
+            self.eta_hat = np.asarray(eta_measured, dtype=float).reshape(6)[DOF]
+            self.eta_hat[2] = wrap_angle_pi(self.eta_hat[2])
+
+        y = np.asarray(eta_measured, dtype=float).reshape(6)[DOF]
+        tau = np.asarray(tau_est, dtype=float).reshape(6)[DOF]
+        psi_m = y[2]
+        y_tilde = y - self.eta_hat - self.C_w @ self.xi_hat
+        y_tilde[2] = wrap_angle_pi(y_tilde[2])
+
+        xi_hat_dot, eta_hat_dot, nu_hat_dot, b_hat_dot = self.estimate_derivatives(y_tilde, tau, psi_m)
+
+        self.xi_hat += xi_hat_dot * dt 
+        self.eta_hat += eta_hat_dot * dt
+        self.eta_hat[2] = wrap_angle_pi(self.eta_hat[2])
+        self.nu_hat += nu_hat_dot * dt
+        self.b_hat += b_hat_dot * dt
+        
+        estimates = np.zeros((3, 6))
+        estimates[:, DOF] = np.stack([self.eta_hat, self.nu_hat, self.b_hat])
+        
+        return ObserverEstimate(eta = estimates[0], nu = estimates[1], bias = estimates[2])
 
 
 class KalmanFilterObserver(Observer):
