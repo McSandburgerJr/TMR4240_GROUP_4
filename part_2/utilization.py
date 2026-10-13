@@ -36,9 +36,13 @@ def thrust_utilization(logs, thrusters) -> np.ndarray:
     all active thrusters (``ThrusterConfig.u_max``).  Return one value per
     time sample, shape ``(len(logs.t),)``.
     """
-    raise NotImplementedError(
+    NotImplementedError(
         "implement thrust_utilization() in part_2/utilization.py — the "
         "definition is in the project text (Part 2, Simulation 5)")
+    
+    return 100*np.sum(np.abs(logs.u), axis = 1) /np.sum([th.u_max for th in thrusters])
+
+        
 
 
 def average_utilization(logs, thrusters, t_from: float | None = None) -> float:
@@ -48,6 +52,11 @@ def average_utilization(logs, thrusters, t_from: float | None = None) -> float:
     TODO (students): implement — the time average of
     :func:`thrust_utilization` over the evaluation window.
     """
-    raise NotImplementedError(
+    NotImplementedError(
         "implement average_utilization() in part_2/utilization.py — the "
         "definition is in the project text (Part 2, Simulation 5)")
+
+    t = logs.t
+    if t_from is None:
+        t_from = t[0] + 0.5 * (t[-1] - t[0])  # second half of the run
+    return np.mean(thrust_utilization(logs, thrusters)[t >= t_from])
