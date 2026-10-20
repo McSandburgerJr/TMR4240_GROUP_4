@@ -189,4 +189,6 @@ class NPOConfig:
     def K_4(self,M):
         return self.bias_ratio * self.K_3(M)
     
-
+@dataclass
+class WindConfig:
+    V_max: float = 25.0        # maximum wind speed [m/s]
