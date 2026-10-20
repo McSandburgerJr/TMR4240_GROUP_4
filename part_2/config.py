@@ -205,11 +205,6 @@ class NPOConfig:
     def K_4(self,M):
         return self.bias_ratio * self.K_3(M)
     
-<<<<<<< Updated upstream
-@dataclass
-class WindConfig:
-    V_max: float = 25.0        # maximum wind speed [m/s]
-=======
 
 @dataclass
 class EKFConfig:
@@ -251,5 +246,6 @@ class EKFConfig:
     
 
     
-
->>>>>>> Stashed changes
+@dataclass
+class WindConfig:
+    V_max: float = 25.0        # maximum wind speed [m/s]
