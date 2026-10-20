@@ -58,6 +58,7 @@ and alpha_rw are the relative wind speed and angle in the BODY frame.
 from pathlib import Path
 from typing import Dict, Tuple
 import numpy as np
+from part_2.config import WindConfig
 
 _WIND_COEFF_FILE = Path(__file__).resolve().parent.parent / "data" / "wind_coeff.csv"
 
@@ -76,6 +77,9 @@ def load_wind_coefficients() -> Tuple[np.ndarray, np.ndarray]:
     table = np.loadtxt(_WIND_COEFF_FILE, delimiter=",", skiprows=1)
     return table[:, 0], table[:, 1:]
 
+def wrap_pi(angle: float) -> float:
+    """Angle [-pi, pi]."""
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 class Wind:
     """Template for the Part 2 wind model.
@@ -133,16 +137,113 @@ class Wind:
         self.dir_limit = float(dir_limit)
         self.seed = seed
 
+        self.alpha_deg_table, self.C6_table = load_wind_coefficients() # Load wind coefficient table from CSV file
+
+        # Initialize random number generator for the slow wind component
+        self.rng = np.random.default_rng(self.seed)
+        self.V_slow = 0.0
+        self.beta_slow = 0.0
+
+        self.V_max = WindConfig().V_max  # Maximum wind speed [m/s] from configuration 
+
+        if self.gust:
+            z = self.gust_params.get('z', 3.0)
+            U_10 = self.mean_speed if self.mean_speed > 0 else 1e-3
+            n = 0.468
+            
+            w_min = self.gust_params.get('w_min', 0.01)
+            w_max = self.gust_params.get('w_max', 3.0)
+            
+            self.N_gust = self.gust_params.get('N_gust', 50)
+            
+            # Inicializace polí před použitím
+            self.gust_omegas = np.zeros(self.N_gust)
+            self.gust_phases = np.zeros(self.N_gust)
+            self.gust_amps = np.zeros(self.N_gust)
+            
+            dw = (w_max - w_min) / self.N_gust
+            df = dw / (2.0 * np.pi)
+            
+            for i in range(self.N_gust):
+                omega = w_min + i * dw
+                self.gust_omegas[i] = omega
+                self.gust_phases[i] = self.rng.uniform(0, 2.0 * np.pi)
+                
+                f = omega / (2.0 * np.pi)
+                x = 172.0 * f * ((z / 10.0)**(2/3)) * ((U_10 / 10.0)**(-0.75))
+                S_f = 320.0 * ((U_10 / 10.0)**2) * ((z / 10.0)**0.45) * ((1.0 + x**n)**(-5.0 / (3.0 * n)))
+                
+                self.gust_amps[i] = np.sqrt(2 * S_f * df)
+
     def step(
-        self,
-        t: float,
-        dt: float,
-        eta: np.ndarray,
-        nu: np.ndarray,
-    ) -> Tuple[np.ndarray, Dict[str, float]]:
-        # TODO: Replace this placeholder with your wind load model.
-        # Default: no wind loads.
-        tau_w6 = np.zeros(6)
-        info = {"U": 0.0, "beta_ned": 0.0, "alpha_body": 0.0,
-                "U_mean": 0.0, "U_gust": 0.0}
-        return tau_w6, info
+            self,
+            t: float,
+            dt: float,
+            eta: np.ndarray,
+            nu: np.ndarray,
+        ) -> Tuple[np.ndarray, Dict[str, float]]:
+            
+            # Slowly varying wind speed (exact discrete-time Ornstein-Uhlenbeck / Gauss-Markov)
+            if self.sigma_slow > 0.0 and self.tau_slow > 0.0:
+                a = np.exp(-dt / self.tau_slow)
+                z = self.rng.normal(0.0, 1.0)
+                self.V_slow = a * self.V_slow + self.sigma_slow * np.sqrt(1.0 - a**2) * z
+            else:
+                self.V_slow = 0.0
+
+            # Slowly varying wind direction (exact discrete-time Ornstein-Uhlenbeck)
+            if self.sigma_dir > 0.0 and self.tau_dir > 0.0:
+                a_dir = np.exp(-dt / self.tau_dir)
+                z_dir = self.rng.normal(0.0, 1.0)
+                self.beta_slow = a_dir * self.beta_slow + self.sigma_dir * np.sqrt(1.0 - a_dir**2) * z_dir
+                # Hard bound on the direction excursion
+                self.beta_slow = np.clip(self.beta_slow, -self.dir_limit, self.dir_limit)
+            else:
+                self.beta_slow = 0.0
+
+            # Gust component
+            U_gust = 0.0
+            if self.gust:
+                U_gust = np.sum(self.gust_amps * np.cos(self.gust_omegas * t + self.gust_phases))
+
+            # Total ambient wind speed (bounded)
+            V_w = np.clip(self.mean_speed + self.V_slow + U_gust, 0.0, self.V_max)
+
+            # Ambient wind direction in NED (convert "from" -> "towards")
+            if self.semantics == "from":
+                beta_ned = wrap_pi(self.beta + self.beta_slow + np.pi)
+            else:
+                beta_ned = wrap_pi(self.beta + self.beta_slow)
+
+            # Ambient wind velocity components in BODY frame
+            psi = eta[5]
+            u_w = V_w * np.cos(beta_ned - psi)
+            v_w = V_w * np.sin(beta_ned - psi)
+
+            # Relative wind velocity in BODY frame (V_wind - V_vessel)
+            u_rw = u_w - nu[0]
+            v_rw = v_w - nu[1]
+            
+            U_rw = np.hypot(u_rw, v_rw)
+
+            # Relative wind angle (Direction TOWARDS which relative wind blows in BODY frame)
+            alpha_body_rad = np.arctan2(v_rw, u_rw)
+            alpha_body_deg = np.degrees(alpha_body_rad) % 360.0
+
+            # Interpolate wind coefficients for the current relative angle
+            C_alpha = np.empty(6)
+            for i in range(6):
+                C_alpha[i] = np.interp(
+                    alpha_body_deg, 
+                    self.alpha_deg_table, 
+                    self.C6_table[:, i], 
+                    period=360.0
+                )
+
+            # Compute final wind loads in BODY frame
+            tau_w6 = (U_rw**2) * C_alpha
+
+            # Logging info
+            info = {"U": float(V_w), "beta_ned": float(beta_ned), "alpha_body": float(alpha_body_rad),
+                    "U_mean": float(self.mean_speed + self.V_slow), "U_gust": float(U_gust)}
+            return tau_w6, info
