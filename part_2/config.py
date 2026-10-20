@@ -35,7 +35,7 @@ class RefAxisConfig:
     # TODO (students): none of the three values below is a tuned value — they
     # are placeholders. Choose the natural frequency, the damping ratio and
     # the rate limit yourself, and justify each of them in the report.
-    wn: float = 0.1                     # natural frequency [rad/s] (placeholder)
+    wn: float = 0.05                    # natural frequency [rad/s] (placeholder)
     zeta: float = 1.0                   # damping ratio [-] (placeholder)
     rate_limit: Optional[float] = None  # max |x_dot| (m/s or rad/s); None = off
 
@@ -133,31 +133,13 @@ class ControllerConfig:
     use_feed_forward: bool = True  # True -> Using feed forward
     use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feed forward
 
-
 @dataclass
-class NPOConfig:
-    omega_0 : np.ndarray = field(default_factory=lambda: np.full(3, 2*np.pi/ 8.0))
+class WaveConfig:
+    lam : np.ndarray = field(default_factory=lambda: np.full(3, 0.1))               # Wave damping coeff
+    omega_0 : np.ndarray = field(default_factory=lambda: np.full(3, 2*np.pi/ 8.0))  # Wave natural frequency
+    sigma : np.ndarray = field(default_factory=lambda: np.ones(3))                  # Wave intensity
     zeta: np.ndarray = field(default_factory= lambda: np.full(3, 0.1))
-    
-    # Wave filter design
-    cutoff_ratio : float = 1.25
-    zeta_n: np.ndarray = field(default_factory= lambda: np.full(3, 1.0))
-    
-    # Bias Model
-    T_b : float = 1000
 
-    #Velocity and bias gains
-    nu_gain_scale: float = 0.1          # K_3 = scale * mass
-    bias_ratio: float = 0.1             # K_4 = ratio * K_3
-
-    @property
-    def omega_c(self):
-        return self.cutoff_ratio * self.omega_0
-
-    @property
-    def T_inv(self):
-        return np.eye(3)/self.T_b
-    
     @property
     def A_w(self):
         Z, I = np.zeros((3,3)), np.eye(3)
@@ -171,9 +153,43 @@ class NPOConfig:
         return np.block([Z, I])
 
     @property
+    def K_w(self):
+        return np.diag(2*self.lam*self.omega_0*self.sigma)
+
+@dataclass
+class BiasConfig:
+    T_b : float = 1000
+
+    @property
+    def T_inv(self):
+        return np.eye(3) / self.T_b
+  
+
+
+@dataclass
+class NPOConfig:
+    wave: WaveConfig = field(default_factory=WaveConfig)
+    bias: BiasConfig = field(default_factory=BiasConfig)
+    p2sim: Part2SimConfig = field(default_factory=Part2SimConfig)
+
+    
+    # Wave filter design
+    cutoff_ratio : float = 1.25
+    zeta_n: np.ndarray = field(default_factory= lambda: np.full(3, 1.0))
+
+    #Velocity and bias gains
+    nu_gain_scale: float = 0.1          # K_3 = scale * mass
+    bias_ratio: float = 0.1             # K_4 = ratio * K_3
+
+    @property
+    def omega_c(self):
+        return self.cutoff_ratio * self.wave.omega_0
+
+
+    @property
     def K_1(self):
-        k1 = 2* self.omega_c/self.omega_0 * (self.zeta - self.zeta_n)
-        k2 = 2*self.omega_0 *(self.zeta_n - self.zeta)
+        k1 = 2* self.omega_c/self.wave.omega_0 * (self.wave.zeta - self.zeta_n)
+        k2 = 2*self.wave.omega_0 *(self.zeta_n - self.wave.zeta)
         return np.vstack([np.diag(k1), np.diag(k2)])
 
     @property
@@ -189,6 +205,51 @@ class NPOConfig:
     def K_4(self,M):
         return self.bias_ratio * self.K_3(M)
     
+<<<<<<< Updated upstream
 @dataclass
 class WindConfig:
     V_max: float = 25.0        # maximum wind speed [m/s]
+=======
+
+@dataclass
+class EKFConfig:
+    wave: WaveConfig = field(default_factory=WaveConfig)
+    bias: BiasConfig = field(default_factory=BiasConfig)
+    p2sim: Part2SimConfig = field(default_factory=Part2SimConfig)
+
+    q_w_N : float = 3
+    q_w_E : float = 3
+    q_w_psi : float = 4e-3
+
+    q_b_N : float = 1e4
+    q_b_E : float = 1e4
+    q_b_psi : float = 1e6
+
+    sigma_N : float = 0.5
+    sigma_E : float = 0.5
+    sigma_psi : float = 8.7e-3
+
+    p0_xi: float = 1.0
+    p0_eta: np.ndarray = field(default_factory=lambda: np.array([1.0, 1.0, 0.01]))
+    p0_nu: np.ndarray = field(default_factory=lambda: np.array([0.1, 0.1, 0.01]))
+    p0_b: np.ndarray = field(default_factory=lambda: np.array([1e8, 1e8, 1e10]))
+
+
+    @property
+    def Q_d(self):
+        Q = np.diag([self.q_w_N, self.q_w_E, self.q_w_psi, self.q_b_N, self.q_b_E, self.q_b_psi])
+        return Q/self.p2sim.dt
+
+    @property
+    def R_d(self):
+        return np.diag([self.sigma_N**2, self.sigma_E**2, self.sigma_psi**2])
+
+    @property
+    def P_0(self):
+        return np.diag(np.concatenate([np.full(6, self.p0_xi),
+                                    self.p0_eta, self.p0_nu, self.p0_b]))
+    
+
+    
+
+>>>>>>> Stashed changes
