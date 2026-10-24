@@ -52,6 +52,8 @@ in ``run_case_part_2.py`` reach your own runs but not the checks.
 """
 from scipy.linalg import solve_continuous_are  #Ricatti solver
 from part_2.config import PIDGains, LQRWeights, ControllerConfig
+from part_2.control_plant_model import ControlPlantModel
+from simulation.utils import Rz, wrap_angle_pi
 import numpy as np
 
 DOF = [0,1,5]
@@ -64,21 +66,21 @@ class DPController:
     ...). Only compute() is required; everything else is optional.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, model : ControlPlantModel | None = None, 
+                 config : ControllerConfig | None = None, **kwargs) -> None:
+        model = model or ControlPlantModel()
+        config = config or ControllerConfig()
         self.Kp = np.asarray(PIDGains().Kp, dtype=float)
         self.Ki = np.asarray(PIDGains().Ki, dtype=float)
         self.Kd = np.asarray(PIDGains().Kd, dtype=float)
 
-
-        M_RB = np.diag([5.741e5, 5.741e5, 4.124e7])
-        M_A = np.array([[2.66e4, 0, 0],[0,1.326e5, -4.733e5], [0, -5.712e5, 1.332e7]])
-
-        self.M = M_RB + M_A
-        self.D = np.diag([2.235e4, 1.114e5, 9.748e6])
+        self.M = model.M
+        self.D = model.D_l
+        
         self.K_lqr = self.design_lqr(LQRWeights())
-        self.use_lqr = ControllerConfig.use_lqr
-        self.use_feed_forward = ControllerConfig.use_feed_forward
-        self.use_coriolis_ff = ControllerConfig.use_coriolis_ff
+        self.use_lqr = config.use_lqr
+        self.use_feed_forward = config.use_feed_forward
+        self.use_coriolis_ff = config.use_coriolis_ff
         if self.use_lqr:
             c_aw = 0.4/10
             K_z = np.diag(self.K_lqr[:, :3])          # integral gains (diagonal of first 3 columns)
@@ -94,22 +96,6 @@ class DPController:
         self._u_cmd = np.zeros(3)
         
 
-    @staticmethod
-
-    def Rz(psi: float)-> np.ndarray:
-        """Rotation matrix about z-axis : Body frame -> NED frame
-        Args: 
-            psi : Heading angle [rad]
-
-        Returns:
-            R   : (3,3) rotation matrix 
-        """
-
-        c, s = np.cos(psi), np.sin(psi)
-
-        return np.array([[c, -s, 0],
-                         [s, c, 0],
-                         [0, 0, 1]])
     
     def PID(self, error : np.array, error_dot : np.array, dt: float) -> np.array:
         """Computing the proportional, integral and derivative terms of the PID
@@ -163,7 +149,7 @@ class DPController:
 
         psi_d = eta_d[5]
         r_d = eta_dot_d[2]
-        R_d = self.Rz(psi_d)
+        R_d = Rz(psi_d)
 
         S = np.array([[0, -r_d, 0],[r_d, 0, 0],[0,0,0]])
         nu_d = R_d.T @ eta_dot_d
@@ -205,7 +191,7 @@ class DPController:
             tau_d       : (3,) body-frame desired forces/moments [X,Y,N]
         """
         psi = eta[5]
-        R = self.Rz(psi)
+        R = Rz(psi)
 
         e = eta[DOF]- eta_ref[DOF]
         e[2] = np.arctan2(np.sin(e[2]), np.cos(e[2]))
@@ -234,7 +220,7 @@ class DPController:
         # Return the (6,) desired BODY wrench — fill in tau_d[0] = Fx,
         # tau_d[1] = Fy, tau_d[5] = Mz and leave the rest zero.
         psi = eta[5]
-        R = self.Rz(psi)
+        R = Rz(psi)
         error = eta[DOF] - eta_ref[DOF]
         error[2] = np.arctan2(np.sin(error[2]), np.cos(error[2]))
 
@@ -277,5 +263,5 @@ class DPController:
         u_a = tau_applied[DOF]
         du_body = self._u_cmd - u_a
 
-        du_ned = self.Rz(psi) @ du_body
+        du_ned = Rz(psi) @ du_body
         self.integral += self.K_aw * du_ned * dt

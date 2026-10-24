@@ -31,6 +31,7 @@ import numpy as np
 
 # Per-axis tuning parameters live with the rest of the Part 2 configuration.
 from part_2.config import RefAxisConfig
+from simulation.utils import wrap_angle_pi
 
 
 class ReferenceModel:
@@ -62,54 +63,66 @@ class ReferenceModel:
         self.acc_ref = np.zeros(6)
 
 
-    # @staticmethod
+    def third_order_jerk(self, cfg: RefAxisConfig, x1: float, x2: float,
+                         x3: float, r: float) -> float:
+        """Desired jerk from the third-order reference model.
 
-    # def second_order_accerleration(cfg: RefAxisConfig, x1, x2, r): 
-    #     """Solving the second-order low-pass filter for desired accelerations. x1 = eta_desired, x2 = eta_dot_desired, r = eta_cmd"""
+        Low-pass filter, per DOF:
+            x1_ddd + (2 zeta + 1) wn x1_dd + (2 zeta + 1) wn^2 x1_d + wn^3 x1 = wn^3 r
 
-    #     wn, zeta= cfg.wn, cfg.zeta
+        Args:
+            cfg : RefAxisConfig with natural frequency wn [rad/s] and damping ratio zeta
+            x1  : desired position [m] or heading [rad]
+            x2  : desired velocity [m/s] or [rad/s]
+            x3  : desired acceleration [m/s^2] or [rad/s^2]
+            r   : commanded setpoint
 
-    #     return wn**2*(r-x1) - 2*zeta*wn*x2
-    
-    @staticmethod
-
-    def third_order_jerk(cfg: RefAxisConfig, x1: float, x2: float, x3: float, r: float):
-        """Solving the third-order low-pass filter for desired jerk.
-        Args: 
-            cfg     : RefAxisConfig w/ natural frequency wn [rad/s] and damping ratio zeta
-            x1      : desired position [m] or rotation [rad] 
-            x2      : desired velocity [m/s]
-            x3      : desired acceleration [m/s^2]
-            r       : commanded setpoint
         Returns:
-            x3_dot  : desired jerk [m/s^3]
+            x3_dot : desired jerk [m/s^3] or [rad/s^3]
         """
         wn, zeta = cfg.wn, cfg.zeta
-        return (wn**3)*(r-x1) - (2*zeta+1)*wn*x3 - (2*zeta+1)*wn**2*x2
+        return wn**3 * (r - x1) - (2*zeta + 1) * wn * x3 - (2*zeta + 1) * wn**2 * x2
 
-    def step(
-        self, t: float, dt: float, eta_cmd: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        # TODO: Replace this pass-through placeholder with your reference model.
+    def step(self, t: float, dt: float,
+             eta_cmd: np.ndarray) -> tuple[np.ndarray, ...]:
+        """One step of the reference model for N, E and psi.
+
+        Filters the commanded setpoint through the third-order reference
+        model to give smooth desired position, velocity and acceleration.
+        Integrated with forward Euler.
+
+        Steps:
+            1. N and E: filter each axis towards its setpoint (cfg_xy).
+            2. psi: use the shortest angle to the setpoint, so the vessel
+               turns the short way, then filter with cfg_psi and wrap.
+
+        Args:
+            t       : current time [s] (unused)
+            dt      : time step [s]
+            eta_cmd : (6,) commanded pose [N, E, z, phi, theta, psi] in NED
+
+        Returns:
+            eta_ref : (6,) desired pose in NED
+            nu_ref  : (6,) desired velocity, time derivative of eta_ref (NED)
+            acc_ref : (6,) desired acceleration (NED)
+        """
         N_cmd, E_cmd, psi_cmd = eta_cmd[0], eta_cmd[1], eta_cmd[5]
 
-        # N, E 
-        for idx, r in ((0,N_cmd), (1,E_cmd)):
+        # 1. N and E
+        for idx, r in ((0, N_cmd), (1, E_cmd)):
             x1, x2, x3 = self.eta_ref[idx], self.nu_ref[idx], self.acc_ref[idx]
             x3_dot = self.third_order_jerk(self.cfg_xy, x1, x2, x3, r)
-            self.eta_ref[idx] = x1 + x2*dt
-            self.nu_ref[idx] = x2 + x3*dt
-            self.acc_ref[idx] = x3 + x3_dot*dt
+            self.eta_ref[idx] = x1 + dt * x2
+            self.nu_ref[idx] = x2 + dt * x3
+            self.acc_ref[idx] = x3 + dt * x3_dot
 
-        # psi - yaw
-        psi_error_uw = psi_cmd - self.eta_ref[5]
-        psi_error = np.arctan2(np.sin(psi_error_uw), np.cos(psi_error_uw))
-        r = self.eta_ref[5] + psi_error
+        # 2. Yaw: setpoint as current reference + shortest angle error,
+        #    so the filter never sees a 2*pi jump
         x1, x2, x3 = self.eta_ref[5], self.nu_ref[5], self.acc_ref[5]
+        r = x1 + wrap_angle_pi(psi_cmd - x1)
         x3_dot = self.third_order_jerk(self.cfg_psi, x1, x2, x3, r)
-        self.eta_ref[5] = np.arctan2(np.sin(x1 + x2*dt),np.cos(x1 + x2*dt))
-        self.nu_ref[5] = x2 + x3*dt
-        self.acc_ref[5] = x3 + x3_dot*dt
+        self.eta_ref[5] = wrap_angle_pi(x1 + dt * x2)
+        self.nu_ref[5] = x2 + dt * x3
+        self.acc_ref[5] = x3 + dt * x3_dot
 
-        
-        return self.eta_ref, self.nu_ref, self.acc_ref
+        return self.eta_ref.copy(), self.nu_ref.copy(), self.acc_ref.copy()

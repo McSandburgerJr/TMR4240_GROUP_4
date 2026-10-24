@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from math import pi
 from typing import Any, Dict, Optional
 from models.thruster_dynamics import ThrusterConfig
+from part_2.control_plant_model import ControlPlantModel
 import numpy as np
 
 
@@ -61,7 +62,7 @@ class Part2SimConfig:
     builds the observer, so a differently tuned observer can be selected from
     the configuration (e.g. ``{"cfg": MyObserverConfig(...)}``).
     """
-    dt: float = 0.1
+    dt: float = 0.01
     T: float = 1000.0
     method: str = "Euler"
     use_controller: bool = True
@@ -101,73 +102,144 @@ def default_thrusters_part_2() -> list[ThrusterConfig]:
                        rot_speed=rotation_speed, alpha0=0.0),
     ]
 
-@dataclass  
-class PIDGains:
-    Kp: np.ndarray = field(default_factory=lambda: np.array([9.61e4, 1.13e5, 8.73e6]))
-    Ki: np.ndarray = field(default_factory=lambda: np.array([3.84e3, 4.52e3, 3.49e5]))
-    Kd: np.ndarray = field(default_factory=lambda: np.array([4.58e5, 4.54e5, 3.39e7]))
+
 
 @dataclass
-class LQRWeights: 
-    #Using Bryons rule
-    max_int: np.ndarray = field(default_factory=lambda: np.array([50.0, 50.0, np.deg2rad(100.0)]))  # integral states [m*s, m*s, rad*s]
+class ControllerConfig:
+    """Controller selection and feed-forward options."""
+
+    use_lqr: bool = True           # True -> LQR with integral effect, False -> PID
+    use_feed_forward: bool = True  # True -> Using feed forward
+    use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feed forward
+
+@dataclass  
+class PIDGains:
+    """PID gains from pole placement, per DOF (surge, sway, yaw).
+
+        K_p = omega_n^2 m
+        K_d = 2 zeta omega_n m - d
+        K_i = omega_n / 10 K_p
+    """
+    ref : RefAxisConfig = field(default_factory=RefAxisConfig)
+    model : ControlPlantModel = field(default_factory=ControlPlantModel)
+
+    zeta: float = 1.0              # closed-loop relative damping
+    omega_ratio: float = 4.0       # omega_n = ratio * reference model frequency
+
+    @property
+    def m(self) -> np.ndarray:
+        """(3,) mass/inertia per DOF, diagonal of M."""
+        return np.diag(self.model.M)
+
+    @property
+    def d(self) -> np.ndarray:
+        """(3,) linear damping per DOF, diagonal of D_l."""
+        return np.diag(self.model.D_l)
+
+    @property
+    def omega_n(self) -> float:
+        """Closed-loop natural frequency [rad/s]."""
+        return self.omega_ratio * self.ref.wn
+
+    @property
+    def Kp(self) -> np.ndarray:
+        """(3, 3) proportional gain."""
+        return np.diag(self.omega_n**2 * self.m)
+
+    @property
+    def Kd(self) -> np.ndarray:
+        """(3, 3) derivative gain."""
+        return np.diag(2 * self.zeta * self.omega_n * self.m - self.d)
+
+    @property
+    def Ki(self) -> np.ndarray:
+        """(3, 3) integral gain."""
+        return self.omega_n / 10 * self.Kp
+
+@dataclass
+class LQRWeights:
+    """LQR weights from Bryson's rule.
+
+    Each state and input is weighted by the inverse square of its
+    largest acceptable value:
+        Q = diag(1 / x_max^2),   R = diag(1 / u_max^2)
+
+    State vector [z, e, nu_err] (9,), where z is the integral of the
+    position/heading error.
+    """
+    max_int: np.ndarray = field(default_factory=lambda: np.array([50.0, 50.0, np.deg2rad(100.0)]))  # integral states [m s, m s, rad s]
     max_err: np.ndarray = field(default_factory=lambda: np.array([1.0, 1.0, np.deg2rad(2.0)]))      # position/heading error [m, m, rad]
     max_vel: np.ndarray = field(default_factory=lambda: np.array([0.5, 0.5, np.deg2rad(1.0)]))      # velocity error [m/s, m/s, rad/s]
     max_tau: np.ndarray = field(default_factory=lambda: np.array([50e3, 50e3, 500e3]))              # thrust [N, N, Nm]
-    
+
     @property
     def Q(self) -> np.ndarray:
-        """9x9 state weight, order [z, e, nu_err]"""
+        """(9, 9) state weight, order [z, e, nu_err]."""
         return np.diag(np.r_[1 / self.max_int**2,
                              1 / self.max_err**2,
                              1 / self.max_vel**2])
 
     @property
     def R(self) -> np.ndarray:
-        """3x3 input weight"""
+        """(3, 3) input weight."""
         return np.diag(1 / self.max_tau**2)
-
-@dataclass
-class ControllerConfig:
-    use_lqr: bool = True           # True -> LQR with integral effect, False -> PID
-    use_feed_forward: bool = True  # True -> Using feed forward
-    use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feed forward
-
 @dataclass
 class WaveConfig:
-    lam : np.ndarray = field(default_factory=lambda: np.full(3, 0.1))               # Wave damping coeff
-    omega_0 : np.ndarray = field(default_factory=lambda: np.full(3, 2*np.pi/ 8.0))  # Wave natural frequency
-    sigma : np.ndarray = field(default_factory=lambda: np.ones(3))                  # Wave intensity
-    zeta: np.ndarray = field(default_factory= lambda: np.full(3, 0.1))
+    """Linear second-order wave model per DOF (surge, sway, yaw).
+
+    Model:
+        xi_dot = A_w xi + K_w w_w
+        eta_w  = C_w xi
+
+    with xi = [xi_1, xi_2] (6,), where xi_2 is the wave-induced motion.
+    
+    """
+    lam : np.ndarray = field(default_factory=lambda: np.full(3, 0.1))               # wave damping coeff, used in K_w
+    omega_0 : np.ndarray = field(default_factory=lambda: np.full(3, 2*np.pi/ 8.0))  # wave peak frequency [rad/s]
+    sigma : np.ndarray = field(default_factory=lambda: np.ones(3))                  # wave intensity
+    zeta: np.ndarray = field(default_factory= lambda: np.full(3, 0.1))              # wave damping ratio, used in A_w
 
     @property
-    def A_w(self):
+    def A_w(self) -> np.ndarray:
+        """(6, 6) wave system matrix, [[0, I], [-Omega^2, -2 Lambda Omega]]."""
         Z, I = np.zeros((3,3)), np.eye(3)
         Omega = self.omega_0 * I  
         Lambda = self.zeta * I
         return np.block([[Z, I],[-Omega @ Omega, -2 * Lambda @ Omega]])
     
     @property
-    def C_w(self):
+    def C_w(self) -> np.ndarray:
+        """(3, 6) wave output matrix, [0, I]: picks out the wave-induced motion."""
         Z, I = np.zeros((3, 3)), np.eye(3)
         return np.block([Z, I])
 
     @property
-    def K_w(self):
+    def K_w(self) -> np.ndarray:
+        """(3, 3) wave noise gain, diag(2 lambda omega_0 sigma)."""
         return np.diag(2*self.lam*self.omega_0*self.sigma)
 
 @dataclass
 class BiasConfig:
+    """First-order bias model: b_dot = -T_b^-1 b + w_b."""
+
     T_b : float = 1000
 
     @property
-    def T_inv(self):
+    def T_inv(self) -> np.ndarray:
+        """(3, 3) inverse bias time constant matrix."""
         return np.eye(3) / self.T_b
   
 
 
 @dataclass
 class NPOConfig:
+    """Models and gains for the nonlinear passive observer.
+
+    K_1, K_2 are chosen from the wave model so the wave filter has
+    notch damping zeta_n and cut-off frequency omega_c.
+    K_3 (velocity) and K_4 (bias) are scaled from the vessel mass.
+
+    """
     wave: WaveConfig = field(default_factory=WaveConfig)
     bias: BiasConfig = field(default_factory=BiasConfig)
     p2sim: Part2SimConfig = field(default_factory=Part2SimConfig)
@@ -182,27 +254,37 @@ class NPOConfig:
     bias_ratio: float = 0.1             # K_4 = ratio * K_3
 
     @property
-    def omega_c(self):
+    def omega_c(self) -> np.ndarray:
+        """(3,) filter cut-off frequencies [rad/s]."""
         return self.cutoff_ratio * self.wave.omega_0
 
 
     @property
-    def K_1(self):
+    def K_1(self) -> np.ndarray:
+        """(6, 3) wave state injection gain."""
         k1 = 2* self.omega_c/self.wave.omega_0 * (self.wave.zeta - self.zeta_n)
         k2 = 2*self.wave.omega_0 *(self.zeta_n - self.wave.zeta)
         return np.vstack([np.diag(k1), np.diag(k2)])
 
     @property
-    def K_2(self):
+    def K_2(self) -> np.ndarray:
+        """(3, 3) position injection gain, diag(omega_c)."""
         k3 = self.omega_c
         return np.diag(k3)
 
-    def K_3(self, M):
+    def K_3(self, M: np.ndarray) -> np.ndarray :
+        """(3, 3) velocity injection gain, scaled from the vessel mass.
+
+        Args:
+            M : (3, 3) mass matrix; surge/sway use the mean mass, yaw the inertia.
+        """
         m = np.diag(M)
         m_xy = 0.5* (m[0]+m[1])
         return self.nu_gain_scale*np.diag([m_xy,m_xy,m[2]])
 
-    def K_4(self,M):
+    def K_4(self,M: np.ndarray) -> np.ndarray:
+        """(3, 3) bias injection gain, K_4 = bias_ratio * K_3."""
+
         return self.bias_ratio * self.K_3(M)
     
 
@@ -211,19 +293,23 @@ class EKFConfig:
     wave: WaveConfig = field(default_factory=WaveConfig)
     bias: BiasConfig = field(default_factory=BiasConfig)
     p2sim: Part2SimConfig = field(default_factory=Part2SimConfig)
-
+    
+    # Process noise, wave states
     q_w_N : float = 3
     q_w_E : float = 3
     q_w_psi : float = 4e-3
 
+    # Process noise, bias states
     q_b_N : float = 1e4
     q_b_E : float = 1e4
-    q_b_psi : float = 1e6
-
+    q_b_psi : float = 1e7
+    
+    # Measurement noise standard deviations [m, m, rad]
     sigma_N : float = 0.5
     sigma_E : float = 0.5
-    sigma_psi : float = 8.7e-3
+    sigma_psi : float = 8.7e-3 # ~0.5 deg
 
+    # Initial covariance (diagonal)
     p0_xi: float = 1.0
     p0_eta: np.ndarray = field(default_factory=lambda: np.array([1.0, 1.0, 0.01]))
     p0_nu: np.ndarray = field(default_factory=lambda: np.array([0.1, 0.1, 0.01]))
@@ -231,16 +317,19 @@ class EKFConfig:
 
 
     @property
-    def Q_d(self):
+    def Q_d(self) -> np.ndarray:
+        """(6, 6) discrete process noise covariance, Q / dt."""
         Q = np.diag([self.q_w_N, self.q_w_E, self.q_w_psi, self.q_b_N, self.q_b_E, self.q_b_psi])
         return Q/self.p2sim.dt
 
     @property
-    def R_d(self):
+    def R_d(self) -> np.ndarray:
+        """(3, 3) measurement noise covariance, diag(sigma^2)."""
         return np.diag([self.sigma_N**2, self.sigma_E**2, self.sigma_psi**2])
 
     @property
-    def P_0(self):
+    def P_0(self) -> np.ndarray:
+        """(15, 15) initial error covariance for [xi, eta, nu, b]."""
         return np.diag(np.concatenate([np.full(6, self.p0_xi),
                                     self.p0_eta, self.p0_nu, self.p0_b]))
     
