@@ -110,11 +110,11 @@ class ThrustAllocator:
         B_e[:,4] = [0, 1, azimuth2.x] # B_Fy_A2
                 
         # Implementing weight matrix and choosing weights
-        W_T = 1/tunnel.u_max**2 # Weight for tunnel thruster
-        W_Fx_A1 = 1/azimuth1.u_max**2 # Weight for azimuth thruster
-        W_Fy_A1 = 1/azimuth1.u_max**2 # Weight for azimuth thruster
-        W_Fx_A2 = 1/azimuth2.u_max**2 # Weight for azimuth thruster
-        W_Fy_A2 = 1/azimuth2.u_max**2 # Weight for azimuth thruster
+        W_T = 1/max(tunnel.u_max**2, 1e-9) # Weight for tunnel thruster
+        W_Fx_A1 = 1/max(azimuth1.u_max**2, 1e-9) # Weight for azimuth thruster
+        W_Fy_A1 = 1/max(azimuth1.u_max**2, 1e-9) # Weight for azimuth thruster
+        W_Fx_A2 = 1/max(azimuth2.u_max**2, 1e-9) # Weight for azimuth thruster
+        W_Fy_A2 = 1/max(azimuth2.u_max**2, 1e-9) # Weight for azimuth thruster
                 
         W = np.diag([W_T, W_Fx_A1, W_Fy_A1, W_Fx_A2, W_Fy_A2]) # Weighting matrix
                 
@@ -197,11 +197,11 @@ class ThrustAllocator:
             df[:,1] = u0[2] * np.array([-np.sin(a2), np.cos(a2), azimuth2.x*np.cos(a2)+azimuth2.y*np.sin(a2)]) # df/da for A2
             
             # Weight matrix for the QP problem
-            W_kN = np.diag([1/tunnel.u_max**2, 1/azimuth1.u_max**2, 1/azimuth2.u_max**2]) * 1e6 # Convert to kN
+            W_kN = np.diag([1/max(tunnel.u_max**2, 1e-9), 1/max(azimuth1.u_max**2, 1e-9), 1/max(azimuth2.u_max**2, 1e-9)]) * 1e6 # Convert to kN
             
             # Q-matrix for the QP problem
             Q_QP = np.diag([1, 1, 10])*100 
-            omega = 1e-3 # Weighting factor for the angle change
+            omega = 1 # Weighting factor for the angle change
             
             # Cost function for the QP problem
             def J_QP(x):
