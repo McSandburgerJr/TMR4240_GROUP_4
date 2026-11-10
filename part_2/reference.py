@@ -49,8 +49,13 @@ class ReferenceModel:
         cfg_psi: RefAxisConfig | None = None,
     ):
         self.dt = float(dt)
-        self.cfg_xy = cfg_xy if cfg_xy is not None else RefAxisConfig()
-        self.cfg_psi = cfg_psi if cfg_psi is not None else RefAxisConfig()
+
+        # Default limits: position [m/s, m/s^2], heading [rad/s, rad/s^2]
+        self.cfg_xy = cfg_xy if cfg_xy is not None else RefAxisConfig(
+            wn = 0.05, zeta = 1.0, v_max=1, a_max=0.01)
+        self.cfg_psi = cfg_psi if cfg_psi is not None else RefAxisConfig(
+            wn = 0.10, zeta =1.0, v_max=np.deg2rad(1.0), a_max=np.deg2rad(0.1))
+
         self.eta_ref = np.zeros(6)
         self.nu_ref = np.zeros(6)
         self.acc_ref = np.zeros(6)
@@ -61,6 +66,21 @@ class ReferenceModel:
         self.eta_ref = np.asarray(eta0, dtype=float).reshape(6).copy()
         self.nu_ref = np.zeros(6)
         self.acc_ref = np.zeros(6)
+
+    @staticmethod
+    def saturate(cfg: RefAxisConfig, x2: float, x3: float) -> tuple[float, float]:
+        """Velocity and acceleration limits on the reference model states.
+
+        Clips the acceleration to a_max and the velocity to v_max. When the
+        velocity is at its limit, acceleration pushing further out is set to
+        zero, so the acceleration state does not wind up.
+        """
+        x3 = float(np.clip(x3, -cfg.a_max, cfg.a_max))
+        if abs(x2) >= cfg.v_max:
+            x2 = float(np.sign(x2) * cfg.v_max)
+            if x2 * x3 > 0:
+                x3 = 0.0
+        return x2, x3
 
 
     def third_order_jerk(self, cfg: RefAxisConfig, x1: float, x2: float,
@@ -113,8 +133,7 @@ class ReferenceModel:
             x1, x2, x3 = self.eta_ref[idx], self.nu_ref[idx], self.acc_ref[idx]
             x3_dot = self.third_order_jerk(self.cfg_xy, x1, x2, x3, r)
             self.eta_ref[idx] = x1 + dt * x2
-            self.nu_ref[idx] = x2 + dt * x3
-            self.acc_ref[idx] = x3 + dt * x3_dot
+            self.nu_ref[idx], self.acc_ref[idx] = self.saturate(self.cfg_xy, x2 + dt * x3, x3 + dt * x3_dot)
 
         # 2. Yaw: setpoint as current reference + shortest angle error,
         #    so the filter never sees a 2*pi jump
@@ -122,7 +141,6 @@ class ReferenceModel:
         r = x1 + wrap_angle_pi(psi_cmd - x1)
         x3_dot = self.third_order_jerk(self.cfg_psi, x1, x2, x3, r)
         self.eta_ref[5] = wrap_angle_pi(x1 + dt * x2)
-        self.nu_ref[5] = x2 + dt * x3
-        self.acc_ref[5] = x3 + dt * x3_dot
+        self.nu_ref[5], self.acc_ref[5] = self.saturate(self.cfg_psi, x2 + dt * x3, x3 + dt * x3_dot)
 
         return self.eta_ref.copy(), self.nu_ref.copy(), self.acc_ref.copy()

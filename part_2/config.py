@@ -38,6 +38,9 @@ class RefAxisConfig:
     # the rate limit yourself, and justify each of them in the report.
     wn: float = 0.05                    # natural frequency [rad/s] (placeholder)
     zeta: float = 1.0                   # damping ratio [-] (placeholder)
+
+    v_max : float = np.inf
+    a_max : float = np.inf
     rate_limit: Optional[float] = None  # max |x_dot| (m/s or rad/s); None = off
 
 
@@ -62,7 +65,7 @@ class Part2SimConfig:
     builds the observer, so a differently tuned observer can be selected from
     the configuration (e.g. ``{"cfg": MyObserverConfig(...)}``).
     """
-    dt: float = 0.01
+    dt: float = 0.1
     T: float = 1000.0
     method: str = "Euler"
     use_controller: bool = True
@@ -168,9 +171,9 @@ class LQRWeights:
     position/heading error.
     """
     max_int: np.ndarray = field(default_factory=lambda: np.array([50.0, 50.0, np.deg2rad(100.0)]))  # integral states [m s, m s, rad s]
-    max_err: np.ndarray = field(default_factory=lambda: np.array([1.0, 1.0, np.deg2rad(2.0)]))      # position/heading error [m, m, rad]
-    max_vel: np.ndarray = field(default_factory=lambda: np.array([0.5, 0.5, np.deg2rad(1.0)]))      # velocity error [m/s, m/s, rad/s]
-    max_tau: np.ndarray = field(default_factory=lambda: np.array([50e3, 50e3, 500e3]))              # thrust [N, N, Nm]
+    max_err: np.ndarray = field(default_factory=lambda: np.array([1.0, 1.0, np.deg2rad(5.0)]))      # position/heading error [m, m, rad]
+    max_vel: np.ndarray = field(default_factory=lambda: np.array([0.5, 0.5, np.deg2rad(2.0)]))      # velocity error [m/s, m/s, rad/s]
+    max_tau: np.ndarray = field(default_factory=lambda: np.array([30e3, 30e3, 300e3]))              # thrust [N, N, Nm]
 
     @property
     def Q(self) -> np.ndarray:
@@ -295,19 +298,20 @@ class EKFConfig:
     p2sim: Part2SimConfig = field(default_factory=Part2SimConfig)
     
     # Process noise, wave states
-    q_w_N : float = 3
-    q_w_E : float = 3
-    q_w_psi : float = 4e-3
+    q_w_N : float = 0.5
+    q_w_E : float = 0.5
+    q_w_psi : float = 0.01
+
 
     # Process noise, bias states
-    q_b_N : float = 1e4
-    q_b_E : float = 1e4
+    q_b_N : float = 1e7
+    q_b_E : float = 1e7
     q_b_psi : float = 1e7
-    
-    # Measurement noise standard deviations [m, m, rad]
-    sigma_N : float = 0.5
-    sigma_E : float = 0.5
-    sigma_psi : float = 8.7e-3 # ~0.5 deg
+
+    # Measurement noise standard deviations [m, m, rad] 
+    sigma_N : float = 0.2
+    sigma_E : float = 0.2
+    sigma_psi : float = np.deg2rad(0.2) 
 
     # Initial covariance (diagonal)
     p0_xi: float = 1.0
@@ -319,8 +323,9 @@ class EKFConfig:
     @property
     def Q_d(self) -> np.ndarray:
         """(6, 6) discrete process noise covariance, Q / dt."""
-        Q = np.diag([self.q_w_N, self.q_w_E, self.q_w_psi, self.q_b_N, self.q_b_E, self.q_b_psi])
-        return Q/self.p2sim.dt
+        Q = np.diag([self.q_w_N, self.q_w_E, self.q_w_psi, 
+                     self.q_b_N, self.q_b_E, self.q_b_psi])
+        return Q
 
     @property
     def R_d(self) -> np.ndarray:

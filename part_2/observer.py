@@ -67,8 +67,7 @@ class NonlinearPassiveObserver(Observer):
     """
 
     name = "nonlinear_passive"
-
-    def __init__(self, conf=None, model=None, **kwargs):
+    def __init__(self, conf : "NPOConfig | None" = None , model: "ControlPlantModel | None" = None, **kwargs) -> None:
         conf = conf or NPOConfig()
         model = model or ControlPlantModel()
 
@@ -202,6 +201,7 @@ class KalmanFilterObserver(Observer):
         """
         conf = conf or EKFConfig()
         model = model or ControlPlantModel()
+        self.dt = conf.p2sim.dt
 
         # Vessel model
         self.M_inv = np.linalg.inv(model.M)
@@ -421,7 +421,7 @@ def select_observer(kind: str, **kwargs) -> Observer:
     """Construct one observer without changing simulator code."""
     choices = {
         "nonlinear_passive": NonlinearPassiveObserver,
-        "kalman": KalmanFilterObserver,
+        "kalman": KalmanFilterObserver
     }
     try:
         return choices[kind](**kwargs)

@@ -58,7 +58,7 @@ class RefAxisConfig:
     # TODO (students): wn below is a placeholder, NOT a tuned value. Choose
     # the natural frequency yourself and justify it in the report (see the
     # project text, Reference Model section).
-    wn: float = 0.15                    # natural frequency [rad/s] (placeholder)
+    wn: float = 0.10                    # natural frequency [rad/s] (placeholder)
     zeta: float = 1.0                   # damping ratio [-]
     rate_limit: Optional[float] = None  # max |x_dot| (m/s or rad/s); None = off
 
@@ -103,7 +103,7 @@ class LQRWeights:
 @dataclass
 class ControllerConfig:
     use_lqr: bool = True           # True -> LQR with integral effect, False -> PID
-    use_feed_forward: bool = True  # True -> Using feed forward
+    use_feed_forward: bool = False  # True -> Using feed forward
     use_coriolis_ff: bool = True   # include C(nu_d) nu_d in the feed forward
 
 @dataclass

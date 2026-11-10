@@ -86,8 +86,8 @@ class DPController:
             K_z = np.diag(self.K_lqr[:, :3])          # integral gains (diagonal of first 3 columns)
             self.K_aw = np.where(K_z > 0, c_aw / K_z, 0.0)
         else:
-            self.K_aw = np.where(self.Ki > 0, 1 / self.Kp, 0.0)
-
+            kp, ki = np.diag(self.Kp), np.diag(self.Ki)
+            self.K_aw = np.divide(1.0, kp, out=np.zeros(3), where=ki > 0)
         self.reset()
 
     def reset(self) -> None:
@@ -97,7 +97,7 @@ class DPController:
         
 
     
-    def PID(self, error : np.array, error_dot : np.array, dt: float) -> np.array:
+    def PID(self, error : np.array, error_dot : np.array, dt: float, R : np.array) -> np.array:
         """Computing the proportional, integral and derivative terms of the PID
         
         Args:
@@ -109,14 +109,14 @@ class DPController:
             P, I, D     : (n,) each, is the three PID control force/moment contributions
         """
         # Proportional
-        P = -self.Kp* error
+        P = -self.Kp @ error
 
         #Integral 
-        self.integral += error*dt
-        I = -self.Ki * self.integral
+        self.integral += (R @ error) * dt
+        I = -self.Ki @ (R.T @ self.integral)
 
         #Derivative
-        D = -self.Kd * error_dot
+        D = -self.Kd @ error_dot
         
         return P, I, D
 
@@ -235,9 +235,10 @@ class DPController:
             tau_d[DOF] = self.LQR(eta, nu, eta_ref, eta_dot_d, dt)
         else:
         #Rotate error_NED to error_BF
-            P, I, D = self.PID(error, error_dot, dt)
-            tau_PID = R.T @ (P+I+D) 
-            tau_d[DOF] = tau_PID
+            e_BF = R.T @ error
+            e_BF_dot = nu[DOF] - R.T @ eta_dot_d
+            P, I, D = self.PID(e_BF, e_BF_dot, dt, R)
+            tau_d[DOF] = P + I + D
         
         if self.use_feed_forward:
             tau_d[DOF] += self.FF(eta_ref, eta_dot_d, eta_ddot_d)  #Feed-Forward
