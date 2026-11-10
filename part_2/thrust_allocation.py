@@ -61,10 +61,10 @@ class ThrustAllocator:
         self.u_cmd_prev = np.zeros(len(thrusters))
         self.prev_sign = np.zeros(len(thrusters))
         #Saturation methods, if false, QP method is used
-        self.part1_saturation = True # Part 1Saturation method
+        self.part1_saturation = False # Part 1Saturation method
         self.part2_QP_NonRotAzimuth = False # SLSQP method with non-rotating azimuth thrusters
         self.part2_QP = False # SLSQP method
-        self.quadrog_QP = False # quadprog method
+        self.quadrog_QP = True # quadprog method
 
     def allocate(
         self,
@@ -203,7 +203,7 @@ class ThrustAllocator:
             
             # Q-matrix for the QP problem
             Q_QP = np.diag([1, 1, 0.01])*100 
-            omega = np.diag([10, 10]) # Weighting factor for the angle change
+            omega = np.diag([1, 1]) # Weighting factor for the angle change
             #----
             if self.part2_QP:
                 # Cost function for the QP problem
