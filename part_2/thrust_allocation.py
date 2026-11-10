@@ -46,6 +46,7 @@ command, and on what basis, is part of your allocation design.
 from typing import List, Optional, Tuple
 import numpy as np
 from scipy.optimize import minimize
+import quadprog
 
 from models.thruster_dynamics import ThrusterConfig
 
@@ -61,7 +62,7 @@ class ThrustAllocator:
         self.prev_sign = np.zeros(len(thrusters))
         #Saturation methods, if false, QP method is used
         self.part1_saturation = False
-        self.part2_qp_LP = False
+        self.part2_QP_NonRotAzimuth = False
         self.part2_QP = True
 
     def allocate(
@@ -141,46 +142,46 @@ class ThrustAllocator:
                         
                 Z *= scale
         # Part 2 QP method with iterative solutions using Linear Programming
-        if self.part2_qp_LP: 
+        if self.part2_QP_NonRotAzimuth: 
             tau_kN = tau_3d / 1000 # Convert to kN
-            W_kN = W * 1e6 # Convert to kN
+            W_kN = W * 1e6 # Convert to kN, W depends on u_max^2
             # Q-matrix (Q >> W > 0)
-            Q = np.diag([1, 1, 10])*100 # Weighting matrix for the QP problem
-            Z = z(tau_kN)
+            Q = np.diag([1, 1, 0.1])*100 # Weighting matrix for the QP problem
+            
             # J
             def J(z):
                 f, s = z[:5], z[5:]
                 return f @ W_kN @ f + s @ Q @ s #  Eq. 12.255, p. 406 Fossen 2011
             
             # B_e f = tau_3d + s
-            eq = {"type": "eq", "fun": lambda z: B_e @ z[:5] - tau_kN - z[5:]}
+            eq = {"type": "eq", "fun": lambda z: B_e @ z[:5] - tau_kN - z[5:]} # Constraint for Eq. 12.255, p. 406 Fossen 2011
+            # B_e f - tau_kN - s = 0 
             
             
-            # Iterative solutions using Linear Programming 
+            # Iterative solutions using Linear Programming
+            # These are the saturtaion constraints for the azimuth thrusters
+            # u_max_A1^2 - F_x_A1^2 - F_y_A1^2 >= 0
+            # u_max_A2^2 - F_x_A2^2 - F_y_A2^2 >= 0
             z_a = {"type": "ineq", "fun": lambda x: np.array([(azimuth1.u_max/1000)**2 - x[1]**2 - x[2]**2,   (azimuth2.u_max/1000)**2 - x[3]**2 - x[4]**2])}
             
-            
+            # minimize:
+            # Takes the cost function, J (that should be minimized)
+            # Initial guess (np.zeros(8))
+            # Bounds for the tunnel, for x and y forces of both azimuth thrusters, and for slack variables (slack variables are unlimited)
+            # Method: SLSQP(Sequential Least Squares Programming) solves the nonlinear optimization problem with constraints
             result = minimize(J, np.zeros(8), bounds = [(-tunnel.u_max/1000, tunnel.u_max/1000)] + [(-azimuth1.u_max/1000, azimuth1.u_max/1000)] * 4 + [(None, None)] * 3, constraints = [eq, z_a], method = "SLSQP")
             f_res = result.x[:5]
-            
-            f_res[0] = np.clip(f_res[0], -tunnel.u_max/1000, tunnel.u_max/1000)
-            for i, j in [(1, 2), (3, 4)]:
-                u = np.hypot(f_res[i], f_res[j])
-                if u > azimuth1.u_max/1000:
-                    f_res[[i,j]] *= (azimuth1.u_max/1000) / u
             
             Z = f_res * 1000 # Convert back to N
         
         # QP method with iterative solutions using Quadratic Programming
         def QP():
             tau_kN = tau_3d / 1000 # Convert to kN
-            Q = np.diag([1, 1, 10])*100 # Weighting matrix for the QP problem
             Z = z(tau_kN)
-            az = [i for i, th in enumerate(self.thrusters) if th.kind == "azimuth"]
             u_max = np.array([tunnel.u_max, azimuth1.u_max, azimuth2.u_max]) / 1000 # Convert to kN
             u_rate = np.array([tunnel.u_rate, azimuth1.u_rate, azimuth2.u_rate]) / 1000 # Convert to kN/s
             
-            u_now_kN = u_now / 1000 if u_now is not None else np.zeros(5) # Convert to kN
+            
             a1 = alpha_now[1]
             a2 = alpha_now[2]
             # Define the configuration matrix for the QP problem which depends on angle
@@ -190,7 +191,7 @@ class ThrustAllocator:
             B_e_QP[:,1] = [np.cos(a1),np.sin(a1),azimuth1.x*np.sin(a1)-azimuth1.y*np.cos(a1)] # B_A1
             B_e_QP[:,2] = [np.cos(a2), np.sin(a2), azimuth2.x*np.sin(a2)-azimuth2.y*np.cos(a2)] # B_A2
             
-            # Define the derivative requirement for the QP problem
+            # Define the derivative requirement for the QP problem, constraint in eq. 12.263, p. 410 Fossen 2011
             u0 = u_prev / 1000 if u_prev is not None else np.zeros(5) # Convert to kN
             df = np.zeros((3,2))
             df[:,0] = u0[1] * np.array([-np.sin(a1), np.cos(a1), azimuth1.x*np.cos(a1)+azimuth1.y*np.sin(a1)]) # df/da for A1
@@ -200,16 +201,19 @@ class ThrustAllocator:
             W_kN = np.diag([1/max(tunnel.u_max**2, 1e-9), 1/max(azimuth1.u_max**2, 1e-9), 1/max(azimuth2.u_max**2, 1e-9)]) * 1e6 # Convert to kN
             
             # Q-matrix for the QP problem
-            Q_QP = np.diag([1, 1, 10])*100 
-            omega = 1 # Weighting factor for the angle change
-            
+            Q_QP = np.diag([1, 1, 0.01])*100 
+            omega = np.diag([1, 1]) # Weighting factor for the angle change
+            #----
+            """
             # Cost function for the QP problem
             def J_QP(x):
+                # x = [delta_u_T, delta_u_A1, delta_u_A2, delta_alpha_A1, delta_alpha_A2, s1, s2, s3]
+                # x includes the change in thrust and angle for each thruster, as well as slack variables for the constraints
                 u = u0 + x[:3]
-                return u @ W_kN @ u + x[5:8] @ Q_QP @ x[5:8] + omega * (x[3]**2 + x[4]**2) # Eq. 12.263, p. 410 Fossen 2011
+                return u @ W_kN @ u + x[5:8] @ Q_QP @ x[5:8] + x[3:5] @ omega @ x[3:5] # Eq. 12.263, p. 410 Fossen 2011
             
-            # Constraints 
-            eq = {"type": "eq", "fun": lambda x: x[5:8] + B_e_QP @ x[0:3] + df @ x[3:5] - (tau_kN-B_e_QP @ u0)} # Eq. 12.263, p. 410 Fossen 2011
+            # Constraints in Eq. 12.263, p. 410 Fossen 2011 
+            eq = {"type": "eq", "fun": lambda x: x[5:8] + B_e_QP @ x[0:3] + df @ x[3:5] - (tau_kN-B_e_QP @ u0)} 
             
             # Limits for the QP problem
             th_less0 = np.maximum(-u_max - u0, -u_rate*dt)
@@ -221,17 +225,46 @@ class ThrustAllocator:
             result = minimize(J_QP, z0, bounds = [(th_less0[i], th_greater0[i]) for i in range(3)] + [(-alpha_rate_limits[k]*dt, alpha_rate_limits[k]*dt) for k in range(2)] + [(None, None)]*3, constraints = [eq], method = "SLSQP")
             Z = result.x 
             
-            u_cmd = np.clip(u0 + Z[0:3], -u_max, u_max) * 1000 # Convert back to N
+            u_cmd = np.clip(u0 + Z[0:3], -u_max, u_max) * 1000 # Convert back to N, the clip ensures that the commanded thrust does not exceed the maximum thrust of the thrusters
             alpha_cmd = alpha_now.copy()
-            alpha_cmd[1] = wrap(a1 + Z[3])
+            alpha_cmd[1] = wrap(a1 + Z[3]) # Wrap ensures that the commanded angle is within the range (-pi, pi]
             alpha_cmd[2] = wrap(a2 + Z[4])
+            """
+            # Med quadprog:
+            H = np.zeros((8, 8))
+            H[0:3, 0:3] = 2*W_kN
+            H[3:5, 3:5] = 2*omega
+            H[5:8, 5:8] = 2*Q_QP
+            q = np.concatenate([2*W_kN @ u0,np.zeros(2),np.zeros(3)])
+            
+            A_eq = np.hstack([B_e_QP, df, np.eye(3)])   # 3×8
+            b_eq = tau_kN - B_e_QP @ u0                 # 3×1
+            
+            # Limits for the QP problem
+            th_less0 = np.maximum(-u_max - u0, -u_rate*dt)
+            th_greater0 = np.minimum(u_max - u0, u_rate*dt)
+            alpha_rate_limits = np.array([azimuth1.rot_speed, azimuth2.rot_speed])
+            lb = np.concatenate([th_less0, -alpha_rate_limits*dt])
+            ub = np.concatenate([th_greater0, alpha_rate_limits*dt])
+            n_b = len(lb) # Only the first 5 variables are bounded
+            I_b = np.hstack([np.eye(n_b), np.zeros((n_b, 3))])
+            C = np.vstack([A_eq, I_b, -I_b]).T
+            b = np.concatenate([b_eq, lb, -ub])
+            
+            Z = quadprog.solve_qp(H, -q, C, b, meq=3)[0]
+            
+            u_cmd = np.clip(u0 + Z[0:3], -u_max, u_max) * 1000 # Convert back to N, the clip ensures that the commanded thrust does not exceed the maximum thrust of the thrusters
+            alpha_cmd = alpha_now.copy()
+            alpha_cmd[1] = wrap(a1 + Z[3]) # Wrap ensures that the commanded angle is within the range (-pi, pi]
+            alpha_cmd[2] = wrap(a2 + Z[4])
+            
             return u_cmd, alpha_cmd
         
         
         if self.part2_QP:
             return QP()
         
-        # Rest of code is used when QP method with iterative solutions using Quadratic Programming is not used
+        # Rest of code is used when self.part2_QP is not used
         u_cmd[0] = Z[0]
         alpha_cmd[0] = tunnel.alpha0
 
@@ -306,7 +339,6 @@ class ThrustAllocator:
                 if th.kind == "azimuth":
                     angle_difference = wrap(alpha_cmd[i] - alpha_prev[i]) # If the differnce in commanded and actual angles is too large, the thrust output has to be reduced to avoid overshoot.
                     
-                    #u_cmd[i] *= (np.cos(angle_difference))
                     dalpha_max = th.rot_speed * dt
                     dalpha = np.clip(angle_difference, -dalpha_max, dalpha_max)
                     alpha_cmd[i] = wrap(alpha_prev[i] + dalpha)
