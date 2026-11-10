@@ -63,8 +63,8 @@ class ThrustAllocator:
         #Saturation methods, if false, QP method is used
         self.part1_saturation = False # Part 1Saturation method
         self.part2_QP_NonRotAzimuth = False # SLSQP method with non-rotating azimuth thrusters
-        self.part2_QP = True # SLSQP method
-        self.quadrog_QP = False # quadprog method
+        self.part2_QP = False # SLSQP method
+        self.quadrog_QP = True # quadprog method
 
     def allocate(
         self,
@@ -147,7 +147,7 @@ class ThrustAllocator:
             tau_kN = tau_3d / 1000 # Convert to kN
             W_kN = W * 1e6 # Convert to kN, W depends on u_max^2
             # Q-matrix (Q >> W > 0)
-            Q = np.diag([1, 1, 0.1])*100 # Weighting matrix for the QP problem
+            Q = np.diag([1, 1, 0.01])*100 # Weighting matrix for the QP problem
             
             # J
             def J(z):
@@ -232,26 +232,40 @@ class ThrustAllocator:
                 alpha_cmd[2] = wrap(a2 + Z[4])
             
             if self.quadrog_QP:
-                # Med quadprog:
+                # With quadprog:
+                # Define the cost function H, has to be matrix form
+                # Same decision vector as in SLSQP
+                # quadprog form has 1/2 * H, so everything has to be multiplied by 2
                 H = np.zeros((8, 8))
                 H[0:3, 0:3] = 2*W_kN
                 H[3:5, 3:5] = 2*omega
                 H[5:8, 5:8] = 2*Q_QP
-                q = np.concatenate([2*W_kN @ u0,np.zeros(2),np.zeros(3)])
-            
-                A_eq = np.hstack([B_e_QP, df, np.eye(3)])   # 3×8
-                b_eq = tau_kN - B_e_QP @ u0                 # 3×1
+                q = np.concatenate([2*W_kN @ u0,np.zeros(2),np.zeros(3)]) # np.zeros(s) is the singualarity part, which we set to zero
+
+                # Constraints for the QP problem Eq 12.263, p. 410 Fossen 2011
+                # Written in matrix form, A_eq * x = b_eq, where x = [delta_u, delta_alpha, s]
+                A_eq = np.zeros((3, 8))
+                A_eq[:, 0:3] = B_e_QP # d(B_e(alpha_0)
+                A_eq[:, 3:5] = df # d(B_e*u)/d(alpha) 
+                A_eq[:, 5:8] = np.eye(3) # Slakk
+                b_eq = tau_kN - B_e_QP @ u0   # Right side of the constraint, tau - B_e_QP * u0             
             
                 # Limits for the QP problem
                 th_less0 = np.maximum(-u_max - u0, -u_rate*dt)
                 th_greater0 = np.minimum(u_max - u0, u_rate*dt)
                 alpha_rate_limits = np.array([azimuth1.rot_speed, azimuth2.rot_speed])
-                lb = np.concatenate([th_less0, -alpha_rate_limits*dt])
-                ub = np.concatenate([th_greater0, alpha_rate_limits*dt])
-                n_b = len(lb) # Only the first 5 variables are bounded
-                I_b = np.hstack([np.eye(n_b), np.zeros((n_b, 3))])
+                # Set the lower and upper limits in matrix form
+                lower = np.zeros(5)
+                upper = np.zeros(5)
+                lower[0:3] = th_less0
+                lower[3:5] = -alpha_rate_limits*dt
+                upper[0:3] = th_greater0
+                upper[3:5] = alpha_rate_limits*dt
+                
+                n_b = len(lower) # Only the first 5 variables are bounded
+                I_b = np.hstack([np.eye(n_b), np.zeros((n_b, 3))]) # Matrix form, first five are difference in thrust and angle, last three are slack vaiables
                 C = np.vstack([A_eq, I_b, -I_b]).T
-                b = np.concatenate([b_eq, lb, -ub])
+                b = np.concatenate([b_eq, lower, -upper]) 
             
                 Z = quadprog.solve_qp(H, -q, C, b, meq=3)[0]
             
