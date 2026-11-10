@@ -61,9 +61,10 @@ class ThrustAllocator:
         self.u_cmd_prev = np.zeros(len(thrusters))
         self.prev_sign = np.zeros(len(thrusters))
         #Saturation methods, if false, QP method is used
-        self.part1_saturation = False
-        self.part2_QP_NonRotAzimuth = False
-        self.part2_QP = True
+        self.part1_saturation = False # Part 1Saturation method
+        self.part2_QP_NonRotAzimuth = False # SLSQP method with non-rotating azimuth thrusters
+        self.part2_QP = True # SLSQP method
+        self.quadrog_QP = False # quadprog method
 
     def allocate(
         self,
@@ -204,64 +205,65 @@ class ThrustAllocator:
             Q_QP = np.diag([1, 1, 0.01])*100 
             omega = np.diag([1, 1]) # Weighting factor for the angle change
             #----
-            """
-            # Cost function for the QP problem
-            def J_QP(x):
-                # x = [delta_u_T, delta_u_A1, delta_u_A2, delta_alpha_A1, delta_alpha_A2, s1, s2, s3]
-                # x includes the change in thrust and angle for each thruster, as well as slack variables for the constraints
-                u = u0 + x[:3]
-                return u @ W_kN @ u + x[5:8] @ Q_QP @ x[5:8] + x[3:5] @ omega @ x[3:5] # Eq. 12.263, p. 410 Fossen 2011
+            if self.part2_QP:
+                # Cost function for the QP problem
+                def J_QP(x):
+                    # x = [delta_u_T, delta_u_A1, delta_u_A2, delta_alpha_A1, delta_alpha_A2, s1, s2, s3]
+                    # x includes the change in thrust and angle for each thruster, as well as slack variables for the constraints
+                    u = u0 + x[:3]
+                    return u @ W_kN @ u + x[5:8] @ Q_QP @ x[5:8] + x[3:5] @ omega @ x[3:5] # Eq. 12.263, p. 410 Fossen 2011
             
-            # Constraints in Eq. 12.263, p. 410 Fossen 2011 
-            eq = {"type": "eq", "fun": lambda x: x[5:8] + B_e_QP @ x[0:3] + df @ x[3:5] - (tau_kN-B_e_QP @ u0)} 
+                # Constraints in Eq. 12.263, p. 410 Fossen 2011 
+                eq = {"type": "eq", "fun": lambda x: x[5:8] + B_e_QP @ x[0:3] + df @ x[3:5] - (tau_kN-B_e_QP @ u0)} 
             
-            # Limits for the QP problem
-            th_less0 = np.maximum(-u_max - u0, -u_rate*dt)
-            th_greater0 = np.minimum(u_max - u0, u_rate*dt)
-            alpha_rate_limits = np.array([azimuth1.rot_speed, azimuth2.rot_speed])
+                # Limits for the QP problem
+                th_less0 = np.maximum(-u_max - u0, -u_rate*dt)
+                th_greater0 = np.minimum(u_max - u0, u_rate*dt)
+                alpha_rate_limits = np.array([azimuth1.rot_speed, azimuth2.rot_speed])
             
-            # Result
-            z0 = np.zeros(8)
-            result = minimize(J_QP, z0, bounds = [(th_less0[i], th_greater0[i]) for i in range(3)] + [(-alpha_rate_limits[k]*dt, alpha_rate_limits[k]*dt) for k in range(2)] + [(None, None)]*3, constraints = [eq], method = "SLSQP")
-            Z = result.x 
+                # Result
+                z0 = np.zeros(8)
+                result = minimize(J_QP, z0, bounds = [(th_less0[i], th_greater0[i]) for i in range(3)] + [(-alpha_rate_limits[k]*dt, alpha_rate_limits[k]*dt) for k in range(2)] + [(None, None)]*3, constraints = [eq], method = "SLSQP")
+                Z = result.x 
             
-            u_cmd = np.clip(u0 + Z[0:3], -u_max, u_max) * 1000 # Convert back to N, the clip ensures that the commanded thrust does not exceed the maximum thrust of the thrusters
-            alpha_cmd = alpha_now.copy()
-            alpha_cmd[1] = wrap(a1 + Z[3]) # Wrap ensures that the commanded angle is within the range (-pi, pi]
-            alpha_cmd[2] = wrap(a2 + Z[4])
-            """
-            # Med quadprog:
-            H = np.zeros((8, 8))
-            H[0:3, 0:3] = 2*W_kN
-            H[3:5, 3:5] = 2*omega
-            H[5:8, 5:8] = 2*Q_QP
-            q = np.concatenate([2*W_kN @ u0,np.zeros(2),np.zeros(3)])
+                u_cmd = np.clip(u0 + Z[0:3], -u_max, u_max) * 1000 # Convert back to N, the clip ensures that the commanded thrust does not exceed the maximum thrust of the thrusters
+                alpha_cmd = alpha_now.copy()
+                alpha_cmd[1] = wrap(a1 + Z[3]) # Wrap ensures that the commanded angle is within the range (-pi, pi]
+                alpha_cmd[2] = wrap(a2 + Z[4])
             
-            A_eq = np.hstack([B_e_QP, df, np.eye(3)])   # 3×8
-            b_eq = tau_kN - B_e_QP @ u0                 # 3×1
+            if self.quadrog_QP:
+                # Med quadprog:
+                H = np.zeros((8, 8))
+                H[0:3, 0:3] = 2*W_kN
+                H[3:5, 3:5] = 2*omega
+                H[5:8, 5:8] = 2*Q_QP
+                q = np.concatenate([2*W_kN @ u0,np.zeros(2),np.zeros(3)])
             
-            # Limits for the QP problem
-            th_less0 = np.maximum(-u_max - u0, -u_rate*dt)
-            th_greater0 = np.minimum(u_max - u0, u_rate*dt)
-            alpha_rate_limits = np.array([azimuth1.rot_speed, azimuth2.rot_speed])
-            lb = np.concatenate([th_less0, -alpha_rate_limits*dt])
-            ub = np.concatenate([th_greater0, alpha_rate_limits*dt])
-            n_b = len(lb) # Only the first 5 variables are bounded
-            I_b = np.hstack([np.eye(n_b), np.zeros((n_b, 3))])
-            C = np.vstack([A_eq, I_b, -I_b]).T
-            b = np.concatenate([b_eq, lb, -ub])
+                A_eq = np.hstack([B_e_QP, df, np.eye(3)])   # 3×8
+                b_eq = tau_kN - B_e_QP @ u0                 # 3×1
             
-            Z = quadprog.solve_qp(H, -q, C, b, meq=3)[0]
+                # Limits for the QP problem
+                th_less0 = np.maximum(-u_max - u0, -u_rate*dt)
+                th_greater0 = np.minimum(u_max - u0, u_rate*dt)
+                alpha_rate_limits = np.array([azimuth1.rot_speed, azimuth2.rot_speed])
+                lb = np.concatenate([th_less0, -alpha_rate_limits*dt])
+                ub = np.concatenate([th_greater0, alpha_rate_limits*dt])
+                n_b = len(lb) # Only the first 5 variables are bounded
+                I_b = np.hstack([np.eye(n_b), np.zeros((n_b, 3))])
+                C = np.vstack([A_eq, I_b, -I_b]).T
+                b = np.concatenate([b_eq, lb, -ub])
             
-            u_cmd = np.clip(u0 + Z[0:3], -u_max, u_max) * 1000 # Convert back to N, the clip ensures that the commanded thrust does not exceed the maximum thrust of the thrusters
-            alpha_cmd = alpha_now.copy()
-            alpha_cmd[1] = wrap(a1 + Z[3]) # Wrap ensures that the commanded angle is within the range (-pi, pi]
-            alpha_cmd[2] = wrap(a2 + Z[4])
+                Z = quadprog.solve_qp(H, -q, C, b, meq=3)[0]
+            
+                u_cmd = np.clip(u0 + Z[0:3], -u_max, u_max) * 1000 # Convert back to N, the clip ensures that the commanded thrust does not exceed the maximum thrust of the thrusters
+                alpha_cmd = alpha_now.copy()
+                alpha_cmd[1] = wrap(a1 + Z[3]) # Wrap ensures that the commanded angle is within the range (-pi, pi]
+                alpha_cmd[2] = wrap(a2 + Z[4])
             
             return u_cmd, alpha_cmd
         
         
-        if self.part2_QP:
+        if self.part2_QP or self.quadrog_QP:
             return QP()
         
         # Rest of code is used when self.part2_QP is not used
