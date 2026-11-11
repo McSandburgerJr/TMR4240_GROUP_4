@@ -80,6 +80,12 @@ class Part2SimConfig:
     thruster_dynamics: bool = True
     bypass_actuators: bool = False
     observer_kwargs: Dict[str, Any] = field(default_factory=dict)
+    
+    # Simulation 7
+    environmental_loads: bool = False # True: enviromental loads, False: no enviromental loads
+    thruster_fail: Optional[int] = 0 # 0 = tunnel, 1 = azimuth 1, 2 = azimuth 2
+    
+    
 
 
 def default_thrusters_part_2() -> list[ThrusterConfig]:

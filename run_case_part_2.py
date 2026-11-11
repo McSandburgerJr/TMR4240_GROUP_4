@@ -45,6 +45,7 @@ from simulation.plotter import (plot_current, plot_dashboard, plot_time_historie
                                 plot_wrench, plot_xy)
 from simulation.simulation_part_2 import DPSimulatorPart2
 
+
 # Some presets deliberately open more figures than matplotlib's default
 # 20-figure warning threshold: Part 2, Simulation 4 alone plots both observers
 # in four conditions.  Raise the threshold so a harmless warning does not read
@@ -71,7 +72,7 @@ SEED = 123
 # there first, then set this to "nonlinear_passive" or "kalman" and justify
 # the choice in the report.  It is None until you choose: every preset that
 # needs it stops with a message instead of picking one for you.
-SELECTED_OBSERVER = None
+SELECTED_OBSERVER = Part2SimConfig().observer_type
 
 # Initial observer error used by the convergence demonstration in Part 2,
 # Simulation 4.  The engine resets every observer at the TRUE initial pose, so
@@ -182,6 +183,7 @@ def standard_plots(logs, *, setpoints=False, observer=False, environment_plots=F
         plot_wind_field(logs)
         plot_current(logs)
         plot_waves(logs)
+    
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +325,46 @@ def sim6():
 def sim7():
     """Part 2, Simulation 7 — your own showcase.  Design it, explain it, discuss it."""
     # TODO (students): replace this with your own scenario.
-    cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=True, observer_type=selected_observer())
-    logs = run(cfg, np.zeros(6), environment())
-    standard_plots(logs, observer=True)
+    # Implement the Four-Corner DP test (SIM3) with observers.
+    # There are two tests for two scenarois. One with tunnel thruster disabled with 
+    # enviromental loads from SIM1 and SIM6 with four-corner DP test with observers.
+    
+    thruster_fail = Part2SimConfig().thruster_fail  # 0 for tunnel, 1 for azimuth thruster 1, 2 for azimuth thruster 2
+    enviroment = Part2SimConfig().environmental_loads  # True for environmental loads, False for no environmental loads
+    def make_sim(cfg: Part2SimConfig, controller=None, thrusters=None):
+        if thrusters is None:
+            thrusters = default_thrusters_part_2()
+        return DPSimulatorPart2(
+        cfg, controller or DPController(), thrusters,
+        reference=ReferenceModel(dt=cfg.dt),
+        allocator=ThrustAllocator(thrusters),
+        observer=select_observer(cfg.observer_type, **cfg.observer_kwargs),
+        )
+    
+    def run(cfg, eta_cmd, env, controller=None, thrusters=None):
+        current, wind, waves = env
+        sim = make_sim(cfg, controller, thrusters)
+        sim.reset_state()
+        return sim.run(eta_cmd, current=current, wind=wind, waves=waves)
+    
+    thrusters = default_thrusters_part_2()
+    thrusters[thruster_fail].u_max = 0.0 # Disable the selected thruster
+    
+    hold = 300
+    
+    cfg = Part2SimConfig(dt=DT, T=5 * hold, use_observer=True, observer_type=selected_observer())
+    sim = DPSimulatorPart2(cfg, DPController(), thrusters, reference=ReferenceModel(dt=cfg.dt), allocator=ThrustAllocator(thrusters), observer=select_observer(cfg.observer_type, **cfg.observer_kwargs))
+    sim.reset_state()
+    
+    if enviroment:
+        env = environment()
+    else: 
+        env = environment(current=False, wind=False, waves=False)
+    
+    logs = run(cfg, four_corner_commands(cfg, hold), env, thrusters=thrusters)
+
+    standard_plots(logs, setpoints=True)
+
     return logs
 
 
