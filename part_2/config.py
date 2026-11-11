@@ -42,8 +42,16 @@ class RefAxisConfig:
     v_max : float = np.inf
     a_max : float = np.inf
     rate_limit: Optional[float] = None  # max |x_dot| (m/s or rad/s); None = off
+    accel_limit: Optional[float] = None
 
-
+@dataclass
+class ReferenceConfig:
+    """Reference model tuning per axis"""
+    xy: RefAxisConfig = field(default_factory=lambda: RefAxisConfig(
+        wn=0.05, zeta=1.0, rate_limit=1.0, accel_limit=0.01))
+    psi: RefAxisConfig = field(default_factory=lambda: RefAxisConfig(
+        wn=0.10, zeta=1.0, rate_limit=np.deg2rad(1.0), accel_limit=np.deg2rad(0.1)))
+    
 @dataclass
 class Part2SimConfig:
     """Part 2-only clock and switches; it does not inherit Part 1 settings.
@@ -129,7 +137,7 @@ class PIDGains:
         K_d = 2 zeta omega_n m - d
         K_i = omega_n / 10 K_p
     """
-    ref : RefAxisConfig = field(default_factory=RefAxisConfig)
+    ref : RefAxisConfig = field(default_factory=ReferenceConfig)
     model : ControlPlantModel = field(default_factory=ControlPlantModel)
 
     zeta: float = 1.0              # closed-loop relative damping
@@ -148,7 +156,8 @@ class PIDGains:
     @property
     def omega_n(self) -> float:
         """Closed-loop natural frequency [rad/s]."""
-        return self.omega_ratio * self.ref.wn
+        omega_ref = np.array([self.ref.xy.wn, self.ref.xy.wn, self.ref.psi.wn])
+        return self.omega_ratio * omega_ref
 
     @property
     def Kp(self) -> np.ndarray:
@@ -163,7 +172,7 @@ class PIDGains:
     @property
     def Ki(self) -> np.ndarray:
         """(3, 3) integral gain."""
-        return self.omega_n / 10 * self.Kp
+        return np.diag(self.omega_n / 10 * self.omega_n**2 * self.m)
 
 @dataclass
 class LQRWeights:

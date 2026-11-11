@@ -45,6 +45,7 @@ from simulation.plotter import (plot_current, plot_dashboard, plot_time_historie
                                 plot_wrench, plot_xy)
 from simulation.simulation_part_2 import DPSimulatorPart2
 
+from part_2.rmse import print_rmse
 
 # Some presets deliberately open more figures than matplotlib's default
 # 20-figure warning threshold: Part 2, Simulation 4 alone plots both observers
@@ -228,6 +229,9 @@ def sim3():
     cfg = Part2SimConfig(dt=DT, T=5 * hold, use_observer=False)
     logs = run(cfg, four_corner_commands(cfg, hold), environment())
     standard_plots(logs, setpoints=True, environment_plots=True)
+    out = {}
+    out[("4 corner test", 'div')] = logs
+    print_rmse(out)
     return logs
 
 
@@ -281,6 +285,7 @@ def sim4():
         standard_plots(logs, setpoints=True, observer=use_obs)
         plt.gcf().suptitle(f"Closed loop — {label}")
         out[("closed loop", label)] = logs
+    print_rmse(out)
     return out
 
 
@@ -319,6 +324,10 @@ def sim6():
     cfg = Part2SimConfig(dt=DT, T=1000.0, use_observer=True, observer_type=selected_observer())
     logs = run(cfg, np.zeros(6), environment(hs=ROBUST_HS, tp=ROBUST_TP))
     standard_plots(logs, observer=True)
+    out ={}
+    out[("closed loop", "heavy sea")] = logs    
+    print_rmse(out, t_end=600)
+    print_rmse(out) 
     return logs
 
 
@@ -390,6 +399,8 @@ def bonus_sensor_noise():
         standard_plots(logs, setpoints=True, observer=use_obs)
         plt.gcf().suptitle(f"Bonus closed loop, sensor noise on — {label}")
         out[("closed loop", label)] = logs
+
+    print_rmse(out)
     return out
 
 
