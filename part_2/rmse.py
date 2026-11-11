@@ -31,7 +31,6 @@ def print_rmse(out, window_s=30.0):
     print("\n--- 1. OBSERVER ESTIMATION RMSE (Eq. 146) ---")
     for name, logs in out.items():
         if getattr(logs, "eta_est", None) is None:            
-        if getattr(logs, "eta_est", None) is None:
             continue
         t = np.asarray(logs.t)
         n = int(window_s / (t[1] - t[0]))  # samples in 30 s
@@ -52,7 +51,7 @@ def print_rmse(out, window_s=30.0):
         e[:, 2] = (e[:, 2] + np.pi) % (2 * np.pi) - np.pi   # wrap heading
         r = np.sqrt(np.mean(e**2, axis=0))
 
-        print(f"{' / '.join(name):35s}"
+        print(f"{' / '.join(name):35s}")
         label = " / ".join(name) if isinstance(name, tuple) else str(name)
         print(f"{label:40s} "
               f"N {r[0]:.3f} m   E {r[1]:.3f} m   psi {np.rad2deg(r[2]):.2f} deg   "
