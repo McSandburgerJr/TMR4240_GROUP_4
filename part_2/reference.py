@@ -30,7 +30,7 @@ from typing import Tuple
 import numpy as np
 
 # Per-axis tuning parameters live with the rest of the Part 2 configuration.
-from part_2.config import RefAxisConfig
+from part_2.config import RefAxisConfig , ReferenceConfig
 from simulation.utils import wrap_angle_pi
 
 
@@ -50,12 +50,9 @@ class ReferenceModel:
     ):
         self.dt = float(dt)
 
-        # Default limits: position [m/s, m/s^2], heading [rad/s, rad/s^2]
-        self.cfg_xy = cfg_xy if cfg_xy is not None else RefAxisConfig(
-            wn = 0.05, zeta = 1.0, v_max=1, a_max=0.01)
-        self.cfg_psi = cfg_psi if cfg_psi is not None else RefAxisConfig(
-            wn = 0.10, zeta =1.0, v_max=np.deg2rad(1.0), a_max=np.deg2rad(0.1))
-
+        defaults = ReferenceConfig()
+        self.cfg_xy = cfg_xy if cfg_xy is not None else defaults.xy
+        self.cfg_psi = cfg_psi if cfg_psi is not None else defaults.psi
         self.eta_ref = np.zeros(6)
         self.nu_ref = np.zeros(6)
         self.acc_ref = np.zeros(6)
@@ -75,6 +72,9 @@ class ReferenceModel:
         velocity is at its limit, acceleration pushing further out is set to
         zero, so the acceleration state does not wind up.
         """
+        v_max = np.inf if cfg.rate_limit is None else cfg.rate_limit
+        a_max = np.inf if cfg.accel_limit is None else cfg.accel_limit
+        
         x3 = float(np.clip(x3, -cfg.a_max, cfg.a_max))
         if abs(x2) >= cfg.v_max:
             x2 = float(np.sign(x2) * cfg.v_max)
