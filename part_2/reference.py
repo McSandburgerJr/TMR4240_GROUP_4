@@ -75,9 +75,9 @@ class ReferenceModel:
         v_max = np.inf if cfg.rate_limit is None else cfg.rate_limit
         a_max = np.inf if cfg.accel_limit is None else cfg.accel_limit
         
-        x3 = float(np.clip(x3, -cfg.a_max, cfg.a_max))
-        if abs(x2) >= cfg.v_max:
-            x2 = float(np.sign(x2) * cfg.v_max)
+        x3 = float(np.clip(x3, -a_max, a_max))
+        if abs(x2) >= v_max:
+            x2 = float(np.sign(x2) * v_max)
             if x2 * x3 > 0:
                 x3 = 0.0
         return x2, x3
