@@ -25,39 +25,37 @@ def _get_thruster_forces_kN(logs):
     return None
 
 
-def print_rmse(out, window_s=30.0):
-    """Print RMSE (estimate - LF truth) for every run in out = sim4()."""
-    """Print RMSE (Eq. 146) and Closed-Loop Station-Keeping & Thruster metrics (Eq. 147-148)."""
-    print("\n--- 1. OBSERVER ESTIMATION RMSE (Eq. 146) ---")
+def print_rmse(out, window_s=30.0, t_end=None):
+    """Print RMSE (Eq. 150) and closed-loop station-keeping & thruster metrics (Eq. 151-152).
+
+    t_end: end of the evaluation window [s]. None = use the whole run.
+    """
+
+    print("\n----------------------------------- 1. OBSERVER ESTIMATION RMSE (Eq. 150) -------------------------------------------")
     for name, logs in out.items():
-        if getattr(logs, "eta_est", None) is None:            
+        if getattr(logs, "eta_est", None) is None:
             continue
         t = np.asarray(logs.t)
-        n = int(window_s / (t[1] - t[0]))  # samples in 30 s
         dt = t[1] - t[0]
         n = int(window_s / dt)  # samples in 30 s
         k = np.ones(n) / n
+        k1 = len(t) if t_end is None else int(t_end / dt)  # end of evaluation window
 
-        x_true = np.hstack([dof3(logs.eta), dof3(logs.nu)])
-        x_hat  = np.hstack([dof3(logs.eta_est), dof3(logs.nu_est)])
-        x_lf   = np.column_stack([np.convolve(c, k, mode="same") for c in x_true.T])
         x_true = np.hstack([dof3(logs.eta), dof3(logs.nu)]).copy()
         x_true[:, 2] = np.unwrap(x_true[:, 2])
         x_hat = np.hstack([dof3(logs.eta_est), dof3(logs.nu_est)])
         x_lf = np.column_stack([np.convolve(c, k, mode="same") for c in x_true.T])
 
-        e = (x_hat - x_lf)[n:-n]           # drop edges
-        e = (x_hat - x_lf)[n:-n]                # drop edges
+        e = (x_hat - x_lf)[n:k1 - n]       # drop edges
         e[:, 2] = (e[:, 2] + np.pi) % (2 * np.pi) - np.pi   # wrap heading
         r = np.sqrt(np.mean(e**2, axis=0))
 
-        print(f"{' / '.join(name):35s}")
         label = " / ".join(name) if isinstance(name, tuple) else str(name)
         print(f"{label:40s} "
               f"N {r[0]:.3f} m   E {r[1]:.3f} m   psi {np.rad2deg(r[2]):.2f} deg   "
               f"u {r[3]:.3f}   v {r[4]:.3f} m/s   r {np.rad2deg(r[5]):.3f} deg/s")
 
-    print("\n--- 2. CLOSED-LOOP STATION-KEEPING (Eq. 147) & ACTUATOR ACTIVITY (Eq. 148) ---")
+    print("\n------------------------------------ 2. CLOSED-LOOP STATION-KEEPING (Eq. 151) & ACTUATOR ACTIVITY (Eq. 152) ------------------------------------")
     for name, logs in out.items():
         label = " / ".join(name) if isinstance(name, tuple) else str(name)
         if "closed loop" not in label.lower():
@@ -66,16 +64,17 @@ def print_rmse(out, window_s=30.0):
         t = np.asarray(logs.t)
         dt = t[1] - t[0]
         n = int(window_s / dt)  # exclude first 30 s transient
+        k1 = len(t) if t_end is None else int(t_end / dt)  # end of evaluation window
 
-        # Eq. (147): RMS of true pose relative to origin
-        eta = dof3(logs.eta)[n:].copy()
+        # Eq. (151): RMS of true pose relative to origin
+        eta = dof3(logs.eta)[n:k1].copy()
         eta[:, 2] = (eta[:, 2] + np.pi) % (2 * np.pi) - np.pi
         rms_sk = np.sqrt(np.mean(eta**2, axis=0))
 
-        # Eq. (148): Mean |u| and Mean |du/dt| over all thrusters
+        # Eq. (152): Mean |u| and Mean |du/dt| over all thrusters
         u_kN = _get_thruster_forces_kN(logs)
         if u_kN is not None:
-            u_kN = u_kN[n:]
+            u_kN = u_kN[n:k1]
             mean_u = np.mean(np.abs(u_kN))
             mean_du = np.mean(np.abs(np.diff(u_kN, axis=0)) / dt)
             # Also compute sum over thrusters in case Table XIV summed across the 3 thrusters:

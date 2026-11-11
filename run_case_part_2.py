@@ -230,7 +230,7 @@ def sim3():
     logs = run(cfg, four_corner_commands(cfg, hold), environment())
     standard_plots(logs, setpoints=True, environment_plots=True)
     out = {}
-    out[("4 corner test", 'div')] = logs
+    out[("4 corner test", 'raw measurement')] = logs
     print_rmse(out)
     return logs
 
@@ -390,7 +390,7 @@ def bonus_sensor_noise():
         logs = run(cfg, np.zeros(6), environment(), controller=fixed)
         plot_observer(logs).suptitle(f"Bonus: observer {kind}, waves + sensor noise")
         plot_observer_error(logs).suptitle(f"Bonus: observer {kind}, waves + sensor noise — estimation errors")
-        out[kind] = logs
+        out[("open loop", kind)] = logs
     for label, use_obs in (("raw noisy measurements", False),
                            (f"observer {selected_observer()}", True)):
         cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=use_obs,
