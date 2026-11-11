@@ -26,14 +26,6 @@ def _get_thruster_forces_kN(logs):
 
 
 def print_rmse(out, window_s=30.0):
-<<<<<<< Updated upstream
-    """Print RMSE (Eq. 146) and Closed-Loop Station-Keeping & Thruster metrics (Eq. 147-148)."""
-    print("\n--- 1. OBSERVER ESTIMATION RMSE (Eq. 146) ---")
-    for name, logs in out.items():
-        if getattr(logs, "eta_est", None) is None:
-            continue
-        t = np.asarray(logs.t)
-=======
     """Print RMSE (estimate - LF truth) for every run in out = sim4()."""
     """Print RMSE (Eq. 146) and Closed-Loop Station-Keeping & Thruster metrics (Eq. 147-148)."""
     print("\n--- 1. OBSERVER ESTIMATION RMSE (Eq. 146) ---")
@@ -43,34 +35,24 @@ def print_rmse(out, window_s=30.0):
             continue
         t = np.asarray(logs.t)
         n = int(window_s / (t[1] - t[0]))  # samples in 30 s
->>>>>>> Stashed changes
         dt = t[1] - t[0]
         n = int(window_s / dt)  # samples in 30 s
         k = np.ones(n) / n
 
-<<<<<<< Updated upstream
-=======
         x_true = np.hstack([dof3(logs.eta), dof3(logs.nu)])
         x_hat  = np.hstack([dof3(logs.eta_est), dof3(logs.nu_est)])
         x_lf   = np.column_stack([np.convolve(c, k, mode="same") for c in x_true.T])
->>>>>>> Stashed changes
         x_true = np.hstack([dof3(logs.eta), dof3(logs.nu)]).copy()
         x_true[:, 2] = np.unwrap(x_true[:, 2])
         x_hat = np.hstack([dof3(logs.eta_est), dof3(logs.nu_est)])
         x_lf = np.column_stack([np.convolve(c, k, mode="same") for c in x_true.T])
 
-<<<<<<< Updated upstream
-=======
         e = (x_hat - x_lf)[n:-n]           # drop edges
->>>>>>> Stashed changes
         e = (x_hat - x_lf)[n:-n]                # drop edges
         e[:, 2] = (e[:, 2] + np.pi) % (2 * np.pi) - np.pi   # wrap heading
         r = np.sqrt(np.mean(e**2, axis=0))
 
-<<<<<<< Updated upstream
-=======
         print(f"{' / '.join(name):35s}"
->>>>>>> Stashed changes
         label = " / ".join(name) if isinstance(name, tuple) else str(name)
         print(f"{label:40s} "
               f"N {r[0]:.3f} m   E {r[1]:.3f} m   psi {np.rad2deg(r[2]):.2f} deg   "
@@ -107,8 +89,4 @@ def print_rmse(out, window_s=30.0):
 
         print(f"{label:40s} "
               f"N {rms_sk[0]:.3f} m   E {rms_sk[1]:.3f} m   psi {np.rad2deg(rms_sk[2]):.2f} deg | "
-<<<<<<< Updated upstream
               f"{thr_info}")
-=======
-              f"{thr_info}")
->>>>>>> Stashed changes
